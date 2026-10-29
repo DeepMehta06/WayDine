@@ -19,10 +19,18 @@ export interface RecommendRequestBody {
   preferences?: RecommendPreferences;
 }
 
+export interface OpeningPeriod {
+  /** 0 = Sunday, matching JS Date#getDay(). */
+  weekday: number;
+  opens_at: string;
+  closes_at: string;
+}
+
 /**
  * A restaurant candidate sourced live from Mapbox's Search Box category API
  * (not a curated DB row). `vegAvailable` is null when the live source has no
- * dietary tag for this POI — unknown, not "no veg options".
+ * dietary tag for this POI — unknown, not "no veg options". `openingHours` is
+ * an empty array when Mapbox has no hours data for this specific place.
  */
 export interface CandidateRestaurant {
   id: string;
@@ -31,6 +39,7 @@ export interface CandidateRestaurant {
   longitude: number;
   cuisine: string | null;
   vegAvailable: boolean | null;
+  openingHours: OpeningPeriod[];
   distanceFromRoadM: number;
   nearestRouteIndex: number;
 }

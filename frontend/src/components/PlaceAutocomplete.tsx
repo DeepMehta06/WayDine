@@ -23,9 +23,19 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
   const [resolving, setResolving] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionTokenRef = useRef(createSessionToken());
+  // Setting query programmatically after a selection re-renders with new text,
+  // which would otherwise re-trigger the search effect below and reopen the
+  // dropdown for the address the user just picked. This flag tells that one
+  // render to skip searching.
+  const skipNextSearchRef = useRef(false);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (skipNextSearchRef.current) {
+      skipNextSearchRef.current = false;
+      return;
+    }
     if (query.trim().length < 3) {
       setSuggestions([]);
       return;
@@ -42,11 +52,13 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
 
   async function handleSelect(suggestion: PlaceSuggestion) {
     setOpen(false);
+    setSuggestions([]);
     setResolving(true);
     const resolved = await retrievePlace(suggestion, sessionTokenRef.current);
     setResolving(false);
     if (!resolved) return;
 
+    skipNextSearchRef.current = true;
     setQuery(resolved.fullAddress);
     sessionTokenRef.current = createSessionToken();
     onSelect(resolved);

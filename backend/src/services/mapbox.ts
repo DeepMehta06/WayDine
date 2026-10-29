@@ -67,12 +67,43 @@ export async function getDurationMatrix(
   return data.durations.map((row) => row.map((v) => v ?? Number.POSITIVE_INFINITY));
 }
 
+export interface RawOpeningPeriod {
+  /** 0 = Sunday, matching JS Date#getDay(). */
+  weekday: number;
+  opens_at: string;
+  closes_at: string;
+}
+
 export interface RawPoi {
   id: string;
   name: string;
   latitude: number;
   longitude: number;
   cuisine: string | null;
+  openingHours: RawOpeningPeriod[];
+}
+
+function formatMapboxTime(hhmm: string): string {
+  return `${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}:00`;
+}
+
+function parseOpeningHours(metadata: unknown): RawOpeningPeriod[] {
+  const periods = (
+    metadata as {
+      open_hours?: {
+        periods?: Array<{ open?: { day: number; time: string }; close?: { day: number; time: string } }>;
+      };
+    }
+  )?.open_hours?.periods;
+  if (!Array.isArray(periods)) return [];
+
+  return periods
+    .filter((p) => p.open?.time && p.close?.time)
+    .map((p) => ({
+      weekday: p.open!.day,
+      opens_at: formatMapboxTime(p.open!.time),
+      closes_at: formatMapboxTime(p.close!.time),
+    }));
 }
 
 /**
@@ -95,7 +126,7 @@ export async function searchRestaurantsNear(point: [number, number], limit = 10)
   const data = (await res.json()) as {
     features: Array<{
       geometry: { coordinates: [number, number] };
-      properties: { mapbox_id: string; name: string; poi_category?: string[] };
+      properties: { mapbox_id: string; name: string; poi_category?: string[]; metadata?: unknown };
     }>;
   };
 
@@ -105,5 +136,6 @@ export async function searchRestaurantsNear(point: [number, number], limit = 10)
     longitude: f.geometry.coordinates[0],
     latitude: f.geometry.coordinates[1],
     cuisine: f.properties.poi_category?.find((c) => c !== "restaurant") ?? f.properties.poi_category?.[0] ?? null,
+    openingHours: parseOpeningHours(f.properties.metadata),
   }));
 }

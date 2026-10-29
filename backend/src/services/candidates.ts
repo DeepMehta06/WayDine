@@ -87,6 +87,7 @@ export async function getCandidates(
         longitude: poi.longitude,
         cuisine: poi.cuisine,
         vegAvailable: null,
+        openingHours: poi.openingHours,
         distanceFromRoadM: Math.round(distanceM),
         nearestRouteIndex: index,
       });

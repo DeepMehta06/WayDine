@@ -42,11 +42,18 @@ destination). This works for any route in India without manual seeding, unlike
 an earlier version of this project that relied on a hand-curated Supabase
 table covering only one highway corridor.
 
-The tradeoff: live POI data doesn't reliably carry cuisine tags, vegetarian
-flags, or opening hours for small highway restaurants. The pipeline treats
-missing data as **unknown, not negative** — a restaurant isn't excluded for
-lacking a vegetarian tag or hours data, it's just not boosted by it either
-(`openAtArrival: null`, shown as "hours unconfirmed" rather than guessed).
+The tradeoff: live POI data doesn't reliably carry cuisine tags or vegetarian
+flags for small highway restaurants (Mapbox's categories are coarse, e.g.
+"indian restaurant" rather than a dietary tag). Opening hours, however, Mapbox
+*does* provide via `metadata.open_hours` on most results — parsed back into
+real `isOpenAt()` checks, same as the original curated-DB design. Where a
+specific place has no hours data, the pipeline treats it as **unknown, not
+negative**: not excluded, not boosted either (`openAtArrival: null`, shown as
+"hours unconfirmed" rather than guessed).
+
+(Evaluated Geoapify's Places API as an alternative — slightly better cuisine
+tags, but fewer results per area and no clear win over Mapbox once the hours
+metadata above was wired in, so stuck with one provider.)
 
 ## Recommendation pipeline (`/api/recommend`)
 

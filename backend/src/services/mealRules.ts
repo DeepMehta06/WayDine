@@ -1,4 +1,4 @@
-import type { GraphRankedRestaurant, MealFilteredRestaurant, MealType } from "../types/index.js";
+import type { GraphRankedRestaurant, MealFilteredRestaurant, MealType, OpeningPeriod } from "../types/index.js";
 
 const MEAL_WINDOWS: Array<{ meal: MealType; startMin: number; endMin: number }> = [
   { meal: "breakfast", startMin: 5 * 60, endMin: 11 * 60 },
@@ -25,6 +25,48 @@ export function mealForArrival(arrival: Date): MealType {
   return "dinner";
 }
 
+function parseTimeOnDate(date: Date, hhmmss: string): Date {
+  const [h, m, s] = hhmmss.split(":").map(Number);
+  const d = new Date(date);
+  d.setHours(h ?? 0, m ?? 0, s ?? 0, 0);
+  return d;
+}
+
+/** True if `closes_at` <= `opens_at`, i.e. the window crosses midnight. */
+function crossesMidnight(opensAt: string, closesAt: string): boolean {
+  return closesAt <= opensAt;
+}
+
+function isOpenAt(hours: OpeningPeriod[], arrival: Date): boolean {
+  const weekday = arrival.getDay();
+  const relevant = hours.filter((h) => h.weekday === weekday);
+
+  for (const h of relevant) {
+    const opens = parseTimeOnDate(arrival, h.opens_at);
+    let closes = parseTimeOnDate(arrival, h.closes_at);
+    if (crossesMidnight(h.opens_at, h.closes_at)) {
+      closes = new Date(closes.getTime() + 24 * 60 * 60 * 1000);
+    }
+    if (arrival >= opens && arrival <= closes) return true;
+  }
+
+  // Also check the previous day's window in case it crosses midnight into today.
+  const prevWeekday = (weekday + 6) % 7;
+  const prevDayRelevant = hours.filter(
+    (h) => h.weekday === prevWeekday && crossesMidnight(h.opens_at, h.closes_at)
+  );
+  for (const h of prevDayRelevant) {
+    const prevDate = new Date(arrival.getTime() - 24 * 60 * 60 * 1000);
+    const opens = parseTimeOnDate(prevDate, h.opens_at);
+    const closes = new Date(
+      parseTimeOnDate(prevDate, h.closes_at).getTime() + 24 * 60 * 60 * 1000
+    );
+    if (arrival >= opens && arrival <= closes) return true;
+  }
+
+  return false;
+}
+
 function etaStringToDate(departureTime: Date, etaArrival: string): Date {
   const [h, m] = etaArrival.split(":").map(Number);
   const d = new Date(departureTime);
@@ -36,10 +78,10 @@ function etaStringToDate(departureTime: Date, etaArrival: string): Date {
 }
 
 /**
- * Attaches the recommended meal type for each candidate's arrival time.
- * `openAtArrival` is left null (unknown) rather than fetched from a curated
- * opening_hours table: live POI search doesn't reliably carry hours data, and
- * guessing "closed" from missing data would wrongly exclude real places.
+ * Attaches the recommended meal type and open/closed status for each
+ * candidate's arrival time. `openAtArrival` is null (unknown) only when
+ * Mapbox has no hours data for that specific place — most POIs do carry
+ * structured hours via the Search Box API's metadata.open_hours.
  */
 export function applyMealRules(
   candidates: GraphRankedRestaurant[],
@@ -47,6 +89,7 @@ export function applyMealRules(
 ): MealFilteredRestaurant[] {
   return candidates.map((candidate) => {
     const arrivalDate = etaStringToDate(departureTime, candidate.etaArrival);
-    return { ...candidate, mealRecommended: mealForArrival(arrivalDate), openAtArrival: null };
+    const openAtArrival = candidate.openingHours.length > 0 ? isOpenAt(candidate.openingHours, arrivalDate) : null;
+    return { ...candidate, mealRecommended: mealForArrival(arrivalDate), openAtArrival };
   });
 }
