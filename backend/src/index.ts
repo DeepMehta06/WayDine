@@ -1,21 +1,24 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { healthRouter } from "./routes/health.js";
-import { restaurantsRouter } from "./routes/restaurants.js";
-import { recommendRouter } from "./routes/recommend.js";
+import { createApp } from "./app.js";
+import { config, describeConfigProblems } from "./config.js";
+import { createSearchLogger } from "./db/searchLog.js";
+import { log } from "./lib/log.js";
+import { createProviderContext } from "./providers/context.js";
 
-const app = express();
-const port = process.env.PORT ? Number(process.env.PORT) : 4000;
-const corsOrigin = process.env.CORS_ORIGIN ?? "http://localhost:5173";
+const ctx = createProviderContext(config);
+const searchLog = await createSearchLogger(config);
 
-app.use(cors({ origin: corsOrigin }));
-app.use(express.json());
+for (const problem of describeConfigProblems(config)) log("warn", "config.problem", { problem });
+log("info", "config.capabilities", { ...config.capabilities, searchLogging: searchLog.enabled });
 
-app.use("/api/health", healthRouter);
-app.use("/api/restaurants", restaurantsRouter);
-app.use("/api/recommend", recommendRouter);
-
-app.listen(port, () => {
-  console.log(`WayDine backend listening on port ${port}`);
+const server = createApp(config, ctx, searchLog).listen(config.PORT, () => {
+  log("info", "server.listening", { port: config.PORT });
 });
+
+function shutdown(signal: string) {
+  log("info", "server.shutdown", { signal });
+  ctx.quota.persistNow();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

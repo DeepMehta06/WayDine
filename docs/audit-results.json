@@ -1,0 +1,60 @@
+{
+  "mockedHttpOnly": true,
+  "reproducedFindings": 9,
+  "findings": [
+    {
+      "issue": "Short route samples only endpoints",
+      "sampled": [
+        "72,19",
+        "72.1,19"
+      ]
+    },
+    {
+      "issue": "Long route stops sampling early and omits destination",
+      "sampled": [
+        "72,19",
+        "72.143,19",
+        "72.286,19",
+        "72.429,19",
+        "72.572,19",
+        "72.715,19",
+        "72.858,19",
+        "73.001,19"
+      ],
+      "destination": "74.5,19"
+    },
+    {
+      "issue": "Point on route rejected by vertex-only distance",
+      "resultCount": 0
+    },
+    {
+      "issue": "Zero cross product classified wrong side",
+      "side": "right"
+    },
+    {
+      "issue": "Unknown diet passes vegetarian-only and gets 93% match",
+      "score": 0.93,
+      "reason": "on your driving direction, good for lunch (hours unconfirmed), virtually no detour"
+    },
+    {
+      "issue": "Same instant produces different meal by server timezone",
+      "utcMeal": "breakfast",
+      "indiaMeal": "lunch"
+    },
+    {
+      "issue": "ETA minute truncation checks next-day hours",
+      "actualArrival": "2026-10-29T12:00:40+05:30",
+      "returnedEta": "12:00",
+      "openAtArrival": false
+    },
+    {
+      "issue": "Unreachable matrix candidate yields invalid ETA and infinite detour",
+      "eta": "Invalid Date",
+      "detour": "Infinity"
+    },
+    {
+      "issue": "Multi-day opening period incorrectly marked closed",
+      "openAtArrival": false
+    }
+  ]
+}

@@ -2,11 +2,22 @@ import path from 'node:path'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
+
+const apiTarget = process.env.WAYDINE_API_PROXY ?? 'http://localhost:4000'
 
 export default defineConfig({
   resolve: {
-    alias: { '@': path.resolve(import.meta.dirname, './src') },
+    alias: {
+      '@contract': path.resolve(import.meta.dirname, '../backend/src/contract/api.ts'),
+      '@': path.resolve(import.meta.dirname, './src'),
+    },
+  },
+  server: {
+    proxy: { '/api': { target: apiTarget, changeOrigin: false } },
+  },
+  preview: {
+    proxy: { '/api': { target: apiTarget, changeOrigin: false } },
   },
   plugins: [
     react(),
@@ -15,13 +26,15 @@ export default defineConfig({
       registerType: 'autoUpdate',
       workbox: {
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [],
       },
       manifest: {
         name: 'WayDine',
         short_name: 'WayDine',
-        description: 'Eat on the way, not out of the way',
+        description: 'Find restaurants on your driving route, with the extra time each stop adds.',
         theme_color: '#2F4F2F',
-        background_color: '#FAF7F0',
+        background_color: '#FAF8F2',
         display: 'standalone',
         start_url: '/',
         icons: [
@@ -39,5 +52,10 @@ export default defineConfig({
         },
       },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

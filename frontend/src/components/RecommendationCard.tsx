@@ -1,48 +1,103 @@
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import type { ReactNode } from "react";
+import { Clock, Leaf, TriangleAlert } from "lucide-react";
+import type { DietPreference, Recommendation } from "@contract";
+import { formatExtra, formatWhen } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Recommendation } from "@/types";
 
 interface RecommendationCardProps {
-  rank: number;
   recommendation: Recommendation;
   selected: boolean;
+  diet: DietPreference;
   onSelect: (id: string) => void;
 }
 
-export function RecommendationCard({ rank, recommendation, selected, onSelect }: RecommendationCardProps) {
+function Pill({ tone, children }: { tone: "good" | "neutral" | "warn"; children: ReactNode }) {
   return (
-    <Card
-      role="button"
-      tabIndex={0}
-      onClick={() => onSelect(recommendation.id)}
-      onKeyDown={(e) => e.key === "Enter" && onSelect(recommendation.id)}
+    <span
       className={cn(
-        "cursor-pointer gap-2 border p-4 transition-colors",
-        selected ? "border-primary bg-secondary/40" : "hover:border-primary/40"
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
+        tone === "good" && "bg-primary/10 text-primary",
+        tone === "neutral" && "bg-muted text-muted-foreground",
+        tone === "warn" && "bg-accent/15 text-accent-foreground"
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-            {rank}
-          </span>
-          <h3 className="text-base leading-tight">{recommendation.name}</h3>
+      {children}
+    </span>
+  );
+}
+
+export function RecommendationCard({ recommendation: r, selected, diet, onSelect }: RecommendationCardProps) {
+  const descriptor = [r.venueType, ...r.cuisines.slice(0, 3)].filter(Boolean).join(" · ");
+  const hours = r.openingHours;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(r.id)}
+      aria-pressed={selected}
+      aria-label={`${r.rank}. ${r.name}, ${formatExtra(r.extraTimeSec)}, arrive ${formatWhen(r.arrivalTime)}`}
+      className={cn(
+        "group w-full rounded-lg border bg-card p-3.5 text-left transition-colors",
+        selected ? "border-primary bg-secondary/50" : "border-border hover:border-primary/40 hover:bg-muted/40"
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className={cn(
+            "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums",
+            selected ? "bg-accent text-accent-foreground" : "bg-primary text-primary-foreground"
+          )}
+        >
+          {r.rank}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="truncate font-sans text-[15px] font-semibold tracking-normal">{r.name}</h3>
+            <span className="shrink-0 text-sm font-semibold text-primary tabular-nums">{formatExtra(r.extraTimeSec)}</span>
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground capitalize">
+            {descriptor || "Food place"} · arrive {formatWhen(r.arrivalTime)}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {hours.atArrival === "open" ? (
+              <Pill tone={hours.closesWithinMinutes !== null ? "warn" : "good"}>
+                <Clock aria-hidden className="size-3" />
+                {hours.closesWithinMinutes !== null ? `Closes ~${hours.closesWithinMinutes} min after you arrive` : "Open when you arrive"}
+              </Pill>
+            ) : (
+              <Pill tone="neutral">
+                <Clock aria-hidden className="size-3" />
+                Hours not listed
+              </Pill>
+            )}
+            {r.diet.vegetarian === "pure-veg" && (
+              <Pill tone="good">
+                <Leaf aria-hidden className="size-3" />
+                Pure veg
+              </Pill>
+            )}
+            {r.diet.vegetarian === "options" && (
+              <Pill tone="good">
+                <Leaf aria-hidden className="size-3" />
+                Veg options
+              </Pill>
+            )}
+            {r.diet.vegetarian === "unknown" && diet !== "any" && (
+              <Pill tone="warn">
+                <Leaf aria-hidden className="size-3" />
+                Veg unconfirmed
+              </Pill>
+            )}
+            {r.access.confidence === "uncertain" && (
+              <Pill tone="warn">
+                <TriangleAlert aria-hidden className="size-3" />
+                Entrance unclear
+              </Pill>
+            )}
+          </div>
         </div>
-        <Badge variant="secondary" className="shrink-0 capitalize">
-          {recommendation.mealRecommended}
-        </Badge>
       </div>
-
-      <div className="flex flex-wrap gap-x-3 gap-y-1 pl-8 text-sm text-muted-foreground">
-        <span>ETA {recommendation.etaArrival}</span>
-        <span>·</span>
-        <span>{recommendation.detourMinutes} min detour</span>
-        <span>·</span>
-        <span>{recommendation.distanceFromRoadM}m off road</span>
-      </div>
-
-      <p className="pl-8 text-sm text-muted-foreground">{recommendation.reason}</p>
-    </Card>
+    </button>
   );
 }

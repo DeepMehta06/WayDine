@@ -15,7 +15,10 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
-    "paths": { "@/*": ["./src/*"] },
+    "paths": {
+      "@/*": ["./src/*"],
+      "@contract": ["../backend/src/contract/api.ts"]
+    },
 
     /* Linting */
     "noUnusedLocals": true,
@@ -23,5 +26,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "../backend/src/contract/api.ts"]
 }

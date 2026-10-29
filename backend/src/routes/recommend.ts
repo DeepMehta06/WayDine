@@ -1,103 +1,116 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getRoute } from "../services/mapbox.js";
-import { getCandidates } from "../services/candidates.js";
-import { classifyDirection } from "../services/direction.js";
-import { rankByDetour } from "../services/graph.js";
-import { applyMealRules } from "../services/mealRules.js";
-import { excludeAndRank } from "../services/ranking.js";
-import { supabase } from "../db/supabaseClient.js";
-import type { RecommendResponseBody } from "../types/index.js";
+import { CUISINE_OPTIONS, type RecommendRequest } from "../contract/api.js";
+import type { SearchLogger } from "../db/searchLog.js";
+import { AppError } from "../errors.js";
+import { SharedRun } from "../lib/cache.js";
+import { asyncHandler, clientKey } from "../lib/express.js";
+import { haversineM, inIndia, type LngLat } from "../lib/geo.js";
+import type { ClientRateLimiter } from "../lib/quota.js";
+import type { ProviderContext } from "../providers/context.js";
+import { recommend } from "../services/recommend.js";
 
-export const recommendRouter = Router();
+const lngLat = z.tuple([z.number().finite().min(-180).max(180), z.number().finite().min(-90).max(90)]);
 
-const lngLat = z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)]);
+export const MIN_ENDPOINT_SEPARATION_M = 150;
+export const SCHEDULE_PAST_TOLERANCE_MIN = 10;
+export const SCHEDULE_MAX_AHEAD_DAYS = 14;
 
-const requestSchema = z.object({
+export const requestSchema = z.object({
   source: lngLat,
   destination: lngLat,
-  departureTime: z.string().datetime({ offset: true }),
-  preferences: z
-    .object({
-      vegetarian: z.boolean().optional(),
-      maxDetourMinutes: z.number().positive().optional(),
-      cuisine: z.string().optional(),
-    })
-    .optional(),
-});
+  departure: z.discriminatedUnion("mode", [
+    z.object({ mode: z.literal("now") }),
+    z.object({ mode: z.literal("at"), time: z.string().datetime({ offset: true }) }),
+  ]),
+  preferences: z.object({
+    diet: z.enum(["any", "vegetarian-options", "pure-veg"]),
+    includeUnconfirmedDiet: z.boolean(),
+    maxDetourMinutes: z.number().int().min(1).max(60),
+    cuisines: z.array(z.enum(CUISINE_OPTIONS)).max(CUISINE_OPTIONS.length),
+  }),
+  routeIndex: z.number().int().min(0).max(2).optional(),
+}) satisfies z.ZodType<RecommendRequest>;
 
-recommendRouter.post("/", async (req, res) => {
-  const parsed = requestSchema.safeParse(req.body);
+export function validateRecommendRequest(body: unknown, now: Date): { input: z.infer<typeof requestSchema>; departure: Date } {
+  const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
-    return;
+    throw new AppError("BAD_REQUEST", "Some trip details are missing or invalid.", { details: parsed.error.flatten() });
+  }
+  const input = parsed.data;
+  const fieldErrors: Record<string, string[]> = {};
+  if (!inIndia(input.source as LngLat)) fieldErrors.source = ["WayDine currently supports trips within India."];
+  if (!inIndia(input.destination as LngLat)) fieldErrors.destination = ["WayDine currently supports trips within India."];
+  if (Object.keys(fieldErrors).length) {
+    throw new AppError("OUT_OF_COVERAGE", "WayDine currently supports trips within India.", { details: { fieldErrors } });
+  }
+  if (haversineM(input.source as LngLat, input.destination as LngLat) < MIN_ENDPOINT_SEPARATION_M) {
+    throw new AppError("BAD_REQUEST", "Your start and destination are the same place. Choose a different destination.", {
+      details: { fieldErrors: { destination: ["Must differ from the start."] } },
+    });
   }
 
-  const { source, destination, departureTime, preferences } = parsed.data;
-  const departure = new Date(departureTime);
-
-  try {
-    // Stage A: route + 200m candidate filter
-    const route = await getRoute(source, destination);
-    const candidates = await getCandidates(route.polyline);
-
-    // Stage B: direction + side-of-road classification
-    const directionClassified = classifyDirection(candidates, route.polyline);
-
-    // Stage C: candidate graph + Dijkstra -> real detour cost (ΔT) per candidate
-    const graphRanked = await rankByDetour(
-      directionClassified,
-      source,
-      destination,
-      route.durationSec,
-      departure
-    );
-
-    // Stage D: time-aware meal recommendation (hours data isn't available from
-    // the live POI source, so openAtArrival is left unknown rather than guessed)
-    const mealFiltered = applyMealRules(graphRanked, departure);
-
-    // Stage E: hard exclusions, then weighted ranking
-    const { ranked, excluded } = excludeAndRank(mealFiltered, preferences);
-
-    void supabase
-      .from("search_history")
-      .insert({
-        source: `POINT(${source[0]} ${source[1]})`,
-        destination: `POINT(${destination[0]} ${destination[1]})`,
-        departure_time: departureTime,
-        preferences: preferences ?? {},
-      })
-      .then(({ error }) => {
-        if (error) console.error("search_history insert failed:", error.message);
+  let departure = now;
+  if (input.departure.mode === "at") {
+    departure = new Date(input.departure.time);
+    const earliest = now.getTime() - SCHEDULE_PAST_TOLERANCE_MIN * 60_000;
+    const latest = now.getTime() + SCHEDULE_MAX_AHEAD_DAYS * 86_400_000;
+    if (departure.getTime() < earliest) {
+      throw new AppError("BAD_REQUEST", "That departure time is in the past. Choose “Leave now” or a later time.", {
+        details: { fieldErrors: { departure: ["In the past."] } },
       });
-
-    const response: RecommendResponseBody = {
-      route: {
-        polyline: route.polyline,
-        totalDurationMin: Math.round(route.durationSec / 60),
-      },
-      recommendations: ranked.map((r) => ({
-        id: r.id,
-        name: r.name,
-        latitude: r.latitude,
-        longitude: r.longitude,
-        etaArrival: r.etaArrival,
-        detourMinutes: r.detourMinutes,
-        distanceFromRoadM: r.distanceFromRoadM,
-        side: r.travelSide,
-        cuisine: r.cuisine,
-        mealRecommended: r.mealRecommended,
-        openAtArrival: r.openAtArrival,
-        score: r.score,
-        reason: r.reason,
-      })),
-      excluded,
-    };
-
-    res.json(response);
-  } catch (err) {
-    console.error("recommend pipeline failed:", err);
-    res.status(502).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    }
+    if (departure.getTime() > latest) {
+      throw new AppError("BAD_REQUEST", `Plan trips up to ${SCHEDULE_MAX_AHEAD_DAYS} days ahead; opening hours further out aren't reliable.`, {
+        details: { fieldErrors: { departure: ["Too far ahead."] } },
+      });
+    }
   }
-});
+  return { input, departure };
+}
+
+export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter, searchLog: SearchLogger): Router {
+  const router = Router();
+  const shared = new SharedRun<Awaited<ReturnType<typeof recommend>>>();
+
+  router.post(
+    "/",
+    asyncHandler(async (req, res) => {
+      const { input, departure } = validateRecommendRequest(req.body, new Date());
+      limiter.check(`recommend:${clientKey(req)}`);
+      if (!ctx.mapboxToken) throw new AppError("NOT_CONFIGURED", "Routing is not configured on this server.");
+
+      // Identical concurrent searches share one pipeline run (no provider data is retained afterwards).
+      const departureKey = input.departure.mode === "now" ? Math.floor(departure.getTime() / 60_000) : input.departure.time;
+      const key = JSON.stringify({ ...input, departure: departureKey });
+      const started = Date.now();
+      const result = await shared.run(key, req.abortSignal, (signal) =>
+        recommend(
+          ctx,
+          {
+            source: input.source as LngLat,
+            destination: input.destination as LngLat,
+            departure,
+            preferences: input.preferences,
+            routeIndex: input.routeIndex,
+          },
+          req.id,
+          signal
+        )
+      );
+
+      searchLog.record({
+        routeDistanceKm: result.route.distanceM / 1000,
+        maxDetourMinutes: input.preferences.maxDetourMinutes,
+        diet: input.preferences.diet,
+        cuisineCount: input.preferences.cuisines.length,
+        resultCount: result.recommendations.length,
+        candidateCount: result.diagnostics.inCorridor,
+        durationMs: Date.now() - started,
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ...result, requestId: req.id });
+    })
+  );
+  return router;
+}

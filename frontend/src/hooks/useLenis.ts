@@ -1,31 +1,29 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useState } from "react";
 import Lenis from "lenis";
 import gsap from "gsap";
+import { useReducedMotion } from "@/lib/motion";
 
-/** Smooth scroll for a scrollable container (the results list), synced to GSAP's ticker. */
-export function useLenis(containerRef: RefObject<HTMLElement | null>) {
-  const lenisRef = useRef<Lenis | null>(null);
+/**
+ * Smooth scrolling for a scroll container, driven by GSAP's ticker. Bound to
+ * the element actually mounted (callback ref), so it initializes whenever the
+ * list appears, and disabled entirely under reduced motion (native scrolling).
+ */
+export function useLenis(enabled: boolean): (el: HTMLElement | null) => void {
+  const [wrapper, setWrapper] = useState<HTMLElement | null>(null);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
-    const wrapper = containerRef.current;
-    if (!wrapper) return;
-
+    if (!enabled || !wrapper || reduced) return;
     const content = wrapper.firstElementChild as HTMLElement | null;
     if (!content) return;
-
-    const lenis = new Lenis({ wrapper, content, duration: 1.0, smoothWheel: true });
-    lenisRef.current = lenis;
-
+    const lenis = new Lenis({ wrapper, content, duration: 0.9, smoothWheel: true });
     const onTick = (time: number) => lenis.raf(time * 1000);
     gsap.ticker.add(onTick);
-    gsap.ticker.lagSmoothing(0);
-
     return () => {
       gsap.ticker.remove(onTick);
       lenis.destroy();
-      lenisRef.current = null;
     };
-  }, [containerRef]);
+  }, [enabled, wrapper, reduced]);
 
-  return lenisRef;
+  return setWrapper;
 }
