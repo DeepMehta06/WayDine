@@ -1,20 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { searchPlaces, type PlaceSuggestion } from "@/lib/mapbox";
+import {
+  createSessionToken,
+  retrievePlace,
+  suggestPlaces,
+  type PlaceSuggestion,
+  type ResolvedPlace,
+} from "@/lib/mapbox";
 
 interface PlaceAutocompleteProps {
   id: string;
   label: string;
   placeholder: string;
-  onSelect: (place: PlaceSuggestion) => void;
+  onSelect: (place: ResolvedPlace) => void;
 }
 
 export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAutocompleteProps) {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [open, setOpen] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionTokenRef = useRef(createSessionToken());
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -23,7 +31,7 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
       return;
     }
     debounceRef.current = setTimeout(async () => {
-      const results = await searchPlaces(query);
+      const results = await suggestPlaces(query, sessionTokenRef.current);
       setSuggestions(results);
       setOpen(results.length > 0);
     }, 300);
@@ -32,10 +40,16 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
     };
   }, [query]);
 
-  function handleSelect(place: PlaceSuggestion) {
-    setQuery(place.fullAddress);
+  async function handleSelect(suggestion: PlaceSuggestion) {
     setOpen(false);
-    onSelect(place);
+    setResolving(true);
+    const resolved = await retrievePlace(suggestion, sessionTokenRef.current);
+    setResolving(false);
+    if (!resolved) return;
+
+    setQuery(resolved.fullAddress);
+    sessionTokenRef.current = createSessionToken();
+    onSelect(resolved);
   }
 
   return (
@@ -48,6 +62,7 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
         value={query}
         placeholder={placeholder}
         autoComplete="off"
+        disabled={resolving}
         onChange={(e) => setQuery(e.target.value)}
         onFocus={() => suggestions.length > 0 && setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
@@ -55,7 +70,7 @@ export function PlaceAutocomplete({ id, label, placeholder, onSelect }: PlaceAut
       {open && (
         <ul className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border border-border bg-popover shadow-md">
           {suggestions.map((s) => (
-            <li key={s.id}>
+            <li key={s.mapboxId}>
               <button
                 type="button"
                 className="block w-full px-3 py-2 text-left text-sm hover:bg-muted"

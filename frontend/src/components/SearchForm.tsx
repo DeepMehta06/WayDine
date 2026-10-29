@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { PlaceAutocomplete } from "@/components/PlaceAutocomplete";
-import type { PlaceSuggestion } from "@/lib/mapbox";
+import type { ResolvedPlace } from "@/lib/mapbox";
 import type { RecommendPreferences } from "@/types";
 
 export interface SearchSubmitValue {
@@ -20,8 +20,8 @@ interface SearchFormProps {
 }
 
 export function SearchForm({ onSubmit, loading }: SearchFormProps) {
-  const [source, setSource] = useState<PlaceSuggestion | null>(null);
-  const [destination, setDestination] = useState<PlaceSuggestion | null>(null);
+  const [source, setSource] = useState<ResolvedPlace | null>(null);
+  const [destination, setDestination] = useState<ResolvedPlace | null>(null);
   const [departureTime, setDepartureTime] = useState("");
   const [vegetarian, setVegetarian] = useState(false);
   const [maxDetourMinutes, setMaxDetourMinutes] = useState(15);
