@@ -19,28 +19,18 @@ export interface RecommendRequestBody {
   preferences?: RecommendPreferences;
 }
 
-export interface RestaurantRow {
+/**
+ * A restaurant candidate sourced live from Mapbox's Search Box category API
+ * (not a curated DB row). `vegAvailable` is null when the live source has no
+ * dietary tag for this POI — unknown, not "no veg options".
+ */
+export interface CandidateRestaurant {
   id: string;
   name: string;
   latitude: number;
   longitude: number;
-  highway_id: string;
-  side: RoadSide;
   cuisine: string | null;
-  veg_available: boolean;
-  road_access_verified: boolean;
-}
-
-export interface OpeningHourRow {
-  id: string;
-  restaurant_id: string;
-  weekday: number;
-  opens_at: string;
-  closes_at: string;
-  meal_type: MealType;
-}
-
-export interface CandidateRestaurant extends RestaurantRow {
+  vegAvailable: boolean | null;
   distanceFromRoadM: number;
   nearestRouteIndex: number;
 }
@@ -57,7 +47,8 @@ export interface GraphRankedRestaurant extends DirectionClassifiedRestaurant {
 
 export interface MealFilteredRestaurant extends GraphRankedRestaurant {
   mealRecommended: MealType;
-  openAtArrival: boolean;
+  /** null when the live POI source has no hours data for this place — unknown, not closed. */
+  openAtArrival: boolean | null;
 }
 
 export interface RankedRestaurant extends MealFilteredRestaurant {
@@ -89,7 +80,7 @@ export interface RecommendResponseBody {
     side: RoadSide;
     cuisine: string | null;
     mealRecommended: MealType;
-    openAtArrival: boolean;
+    openAtArrival: boolean | null;
     score: number;
     reason: string;
   }>;

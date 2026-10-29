@@ -29,14 +29,17 @@ function foodMatchScore(
   preferences: RecommendPreferences | undefined
 ): number {
   let score = 1;
-  if (preferences?.vegetarian && !candidate.veg_available) score -= 0.6;
+  // Only penalize a known non-veg place; vegAvailable === null means the live
+  // source has no dietary tag for it, not that it lacks veg options.
+  if (preferences?.vegetarian && candidate.vegAvailable === false) score -= 0.6;
   if (preferences?.cuisine && candidate.cuisine !== preferences.cuisine) score -= 0.3;
   return Math.max(0, score);
 }
 
 function timingScore(candidate: MealFilteredRestaurant): number {
-  // Already filtered to openAtArrival === true by the time this runs; reward
-  // a meal-type match (e.g. arriving at lunchtime and it serves lunch) highest.
+  // openAtArrival is unknown (null) for live-sourced POIs — neutral score,
+  // neither rewarded nor penalized since we have no signal either way.
+  if (candidate.openAtArrival === null) return 0.5;
   return candidate.openAtArrival ? 1 : 0;
 }
 
@@ -47,7 +50,11 @@ function proximityScore(distanceFromRoadM: number): number {
 function buildReason(candidate: MealFilteredRestaurant): string {
   const parts: string[] = [];
   parts.push(candidate.matchesRouteDirection ? "on your driving direction" : "requires crossing traffic");
-  parts.push(candidate.openAtArrival ? `open on arrival (${candidate.mealRecommended})` : "closed on arrival");
+  if (candidate.openAtArrival === null) {
+    parts.push(`good for ${candidate.mealRecommended} (hours unconfirmed)`);
+  } else {
+    parts.push(candidate.openAtArrival ? `open on arrival (${candidate.mealRecommended})` : "closed on arrival");
+  }
   parts.push(
     candidate.detourMinutes <= 1
       ? "virtually no detour"
@@ -74,7 +81,7 @@ export function excludeAndRank(
       });
       continue;
     }
-    if (!candidate.openAtArrival) {
+    if (candidate.openAtArrival === false) {
       excluded.push({
         id: candidate.id,
         name: candidate.name,
@@ -90,7 +97,7 @@ export function excludeAndRank(
       });
       continue;
     }
-    if (preferences?.vegetarian && !candidate.veg_available) {
+    if (preferences?.vegetarian && candidate.vegAvailable === false) {
       excluded.push({
         id: candidate.id,
         name: candidate.name,

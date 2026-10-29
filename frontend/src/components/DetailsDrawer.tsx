@@ -32,7 +32,13 @@ export function DetailsDrawer({ recommendation, onClose }: DetailsDrawerProps) {
                 <Badge variant="secondary" className="capitalize">
                   {recommendation.mealRecommended}
                 </Badge>
-                <Badge variant="outline">{recommendation.openAtArrival ? "Open now" : "Closed"}</Badge>
+                <Badge variant="outline">
+                  {recommendation.openAtArrival === null
+                    ? "Hours unconfirmed"
+                    : recommendation.openAtArrival
+                      ? "Open now"
+                      : "Closed"}
+                </Badge>
               </div>
 
               <Separator />

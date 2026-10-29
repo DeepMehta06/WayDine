@@ -53,8 +53,9 @@ recommendRouter.post("/", async (req, res) => {
       departure
     );
 
-    // Stage D: time-aware meal + opening-hours filtering
-    const mealFiltered = await applyMealRules(graphRanked, departure);
+    // Stage D: time-aware meal recommendation (hours data isn't available from
+    // the live POI source, so openAtArrival is left unknown rather than guessed)
+    const mealFiltered = applyMealRules(graphRanked, departure);
 
     // Stage E: hard exclusions, then weighted ranking
     const { ranked, excluded } = excludeAndRank(mealFiltered, preferences);
@@ -84,7 +85,7 @@ recommendRouter.post("/", async (req, res) => {
         etaArrival: r.etaArrival,
         detourMinutes: r.detourMinutes,
         distanceFromRoadM: r.distanceFromRoadM,
-        side: r.side,
+        side: r.travelSide,
         cuisine: r.cuisine,
         mealRecommended: r.mealRecommended,
         openAtArrival: r.openAtArrival,

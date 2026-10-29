@@ -3,6 +3,7 @@ import type { MapboxDirectionsResult } from "../types/index.js";
 const MAPBOX_TOKEN = process.env.MAPBOX_SECRET_TOKEN;
 const DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/driving";
 const MATRIX_URL = "https://api.mapbox.com/directions-matrix/v1/mapbox/driving";
+const SEARCHBOX_URL = "https://api.mapbox.com/search/searchbox/v1";
 
 function assertToken(): string {
   if (!MAPBOX_TOKEN) {
@@ -64,4 +65,45 @@ export async function getDurationMatrix(
   }
   const data = (await res.json()) as { durations: (number | null)[][] };
   return data.durations.map((row) => row.map((v) => v ?? Number.POSITIVE_INFINITY));
+}
+
+export interface RawPoi {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  cuisine: string | null;
+}
+
+/**
+ * Restaurants near a point via Mapbox's Search Box category API — replaces the
+ * curated-DB lookup so the pipeline works on any route, not just pre-seeded ones.
+ */
+export async function searchRestaurantsNear(point: [number, number], limit = 10): Promise<RawPoi[]> {
+  const token = assertToken();
+  const [lng, lat] = point;
+  const delta = 0.03; // ~3km box around the sample point, keeps results tight to the route
+  const bbox = [lng - delta, lat - delta, lng + delta, lat + delta].join(",");
+  const url =
+    `${SEARCHBOX_URL}/category/restaurant?access_token=${token}&proximity=${lng},${lat}` +
+    `&bbox=${bbox}&limit=${limit}&language=en&country=in`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Mapbox Search Box category API failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as {
+    features: Array<{
+      geometry: { coordinates: [number, number] };
+      properties: { mapbox_id: string; name: string; poi_category?: string[] };
+    }>;
+  };
+
+  return data.features.map((f) => ({
+    id: f.properties.mapbox_id,
+    name: f.properties.name,
+    longitude: f.geometry.coordinates[0],
+    latitude: f.geometry.coordinates[1],
+    cuisine: f.properties.poi_category?.find((c) => c !== "restaurant") ?? f.properties.poi_category?.[0] ?? null,
+  }));
 }

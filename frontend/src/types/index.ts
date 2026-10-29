@@ -25,7 +25,7 @@ export interface Recommendation {
   side: RoadSide;
   cuisine: string | null;
   mealRecommended: MealType;
-  openAtArrival: boolean;
+  openAtArrival: boolean | null;
   score: number;
   reason: string;
 }

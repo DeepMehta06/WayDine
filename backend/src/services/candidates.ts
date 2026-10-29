@@ -1,12 +1,13 @@
-import { supabase } from "../db/supabaseClient.js";
-import type { CandidateRestaurant, RoadSide } from "../types/index.js";
+import { searchRestaurantsNear } from "./mapbox.js";
+import type { CandidateRestaurant } from "../types/index.js";
 
-const ROUTE_BUFFER_METERS = 200;
-
-function toLineStringWkt(polyline: [number, number][]): string {
-  const points = polyline.map(([lng, lat]) => `${lng} ${lat}`).join(", ");
-  return `LINESTRING(${points})`;
-}
+// Live POI coordinates are less precise than surveyed data, so the buffer is
+// wider than the original curated-DB radius (200m).
+const ROUTE_BUFFER_METERS = 400;
+const SAMPLE_INTERVAL_METERS = 15000;
+const MAX_SAMPLES = 8;
+// Mapbox Matrix API caps at 25 coordinates per call; graph.ts reserves 2 for source/destination.
+const MAX_CANDIDATES = 23;
 
 function haversineMeters(a: [number, number], b: [number, number]): number {
   const R = 6371000;
@@ -21,8 +22,11 @@ function haversineMeters(a: [number, number], b: [number, number]): number {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-/** Index of the closest point on the route polyline to a given restaurant location. */
-function nearestRouteIndex(point: [number, number], polyline: [number, number][]): number {
+/** Closest point on the route polyline to a given location, with its distance. */
+function nearestRoutePoint(
+  point: [number, number],
+  polyline: [number, number][]
+): { index: number; distanceM: number } {
   let bestIdx = 0;
   let bestDist = Infinity;
   for (let i = 0; i < polyline.length; i++) {
@@ -32,51 +36,64 @@ function nearestRouteIndex(point: [number, number], polyline: [number, number][]
       bestIdx = i;
     }
   }
-  return bestIdx;
+  return { index: bestIdx, distanceM: bestDist };
+}
+
+/** Points roughly every SAMPLE_INTERVAL_METERS along the route, capped at MAX_SAMPLES. */
+function sampleRoutePoints(polyline: [number, number][]): [number, number][] {
+  if (polyline.length === 0) return [];
+
+  const samples: [number, number][] = [polyline[0]!];
+  let accDist = 0;
+  for (let i = 1; i < polyline.length && samples.length < MAX_SAMPLES; i++) {
+    accDist += haversineMeters(polyline[i - 1]!, polyline[i]!);
+    if (accDist >= SAMPLE_INTERVAL_METERS) {
+      samples.push(polyline[i]!);
+      accDist = 0;
+    }
+  }
+
+  const last = polyline[polyline.length - 1]!;
+  if (samples.length < MAX_SAMPLES && samples[samples.length - 1] !== last) {
+    samples.push(last);
+  }
+  return samples;
 }
 
 /**
- * Candidate restaurants within ROUTE_BUFFER_METERS of the route polyline,
- * via the restaurants_near_route Postgres RPC (ST_DWithin on a GiST index).
+ * Candidate restaurants within ROUTE_BUFFER_METERS of the route, sourced live
+ * from Mapbox's Search Box category API at points sampled along the polyline
+ * (replaces the curated-DB ST_DWithin lookup so any route works, not just a
+ * pre-seeded corridor).
  */
 export async function getCandidates(
   routePolyline: [number, number][]
 ): Promise<CandidateRestaurant[]> {
-  const routeWkt = toLineStringWkt(routePolyline);
+  const samples = sampleRoutePoints(routePolyline);
+  const results = await Promise.all(samples.map((pt) => searchRestaurantsNear(pt)));
 
-  const { data, error } = await supabase.rpc("restaurants_near_route", {
-    route_wkt: routeWkt,
-    radius_m: ROUTE_BUFFER_METERS,
-  });
+  const byId = new Map<string, CandidateRestaurant>();
+  for (const pois of results) {
+    for (const poi of pois) {
+      if (byId.has(poi.id)) continue;
 
-  if (error) {
-    throw new Error(`restaurants_near_route RPC failed: ${error.message}`);
+      const { index, distanceM } = nearestRoutePoint([poi.longitude, poi.latitude], routePolyline);
+      if (distanceM > ROUTE_BUFFER_METERS) continue;
+
+      byId.set(poi.id, {
+        id: poi.id,
+        name: poi.name,
+        latitude: poi.latitude,
+        longitude: poi.longitude,
+        cuisine: poi.cuisine,
+        vegAvailable: null,
+        distanceFromRoadM: Math.round(distanceM),
+        nearestRouteIndex: index,
+      });
+    }
   }
 
-  type RpcRow = {
-    id: string;
-    name: string;
-    latitude: number;
-    longitude: number;
-    highway_id: string;
-    side: RoadSide;
-    cuisine: string | null;
-    veg_available: boolean;
-    road_access_verified: boolean;
-    distance_from_road_m: number;
-  };
-
-  return ((data ?? []) as RpcRow[]).map((row) => ({
-    id: row.id,
-    name: row.name,
-    latitude: row.latitude,
-    longitude: row.longitude,
-    highway_id: row.highway_id,
-    side: row.side,
-    cuisine: row.cuisine,
-    veg_available: row.veg_available,
-    road_access_verified: row.road_access_verified,
-    distanceFromRoadM: Math.round(row.distance_from_road_m),
-    nearestRouteIndex: nearestRouteIndex([row.longitude, row.latitude], routePolyline),
-  }));
+  return Array.from(byId.values())
+    .sort((a, b) => a.distanceFromRoadM - b.distanceFromRoadM)
+    .slice(0, MAX_CANDIDATES);
 }
