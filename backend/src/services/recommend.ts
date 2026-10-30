@@ -12,7 +12,7 @@ import type {
   ExcludedPlace,
   ExclusionStage,
   LngLat,
-  Provider,
+  RestaurantProvider as Provider,
   Recommendation,
   RecommendResponse,
 } from "../contract/api.js";
@@ -20,12 +20,18 @@ import { AppError } from "../errors.js";
 import { simplifyLine } from "../lib/geo.js";
 import { mealPeriodAt, RESTAURANT_TIME_ZONE } from "../lib/time.js";
 import type { ProviderContext } from "../providers/context.js";
-import { mapboxDirections } from "../providers/mapbox.js";
+import { googleDetails } from "../providers/google.js";
+import { mapSettled } from "../lib/http.js";
+import { positionOnRoute } from "../lib/geo.js";
+import { discoverGoogleVenues } from "./googleDiscovery.js";
 import { corridorHalfWidthM, discoverVenues, type CorridorVenue } from "./discovery.js";
 import { cuisineDecision, dietDecision } from "./eligibility.js";
 import { evaluateHours } from "./hours.js";
 import { explain, formatMinutes, sortByRankingCost, RANKING_PENALTIES_SEC, type RankInput } from "./ranking.js";
-import { screenByMatrix, SCREEN_BATCH, verifyStops } from "./routing.js";
+import { directions as getDirections, screenByMatrix, SCREEN_BATCH, verifyStops } from "./routing.js";
+import { assessRoute } from "./routeEvidence.js";
+import { mealRecommendation } from "./meal.js";
+import { assessBudget } from "./budget.js";
 
 export const RECOMMEND_LIMITS = {
   screenMax: SCREEN_BATCH * 2,
@@ -45,6 +51,7 @@ export interface RecommendInput {
     includeUnconfirmedDiet: boolean;
     maxDetourMinutes: number;
     cuisines: CuisineId[];
+    budgetPerPersonInr?: number | null;
   };
   routeIndex?: number;
 }
@@ -105,7 +112,7 @@ export async function recommend(
   requestId: string,
   signal?: AbortSignal,
   now: () => number = Date.now
-): Promise<RecommendResponse> {
+): Promise<RecommendResponse<Provider>> {
   const stageMs: Record<string, number> = {};
   const warnings: string[] = [];
   const excluded: Array<ExcludedPlace & { order: number }> = [];
@@ -124,7 +131,7 @@ export async function recommend(
   };
 
   // 1. Baseline route (explicitly selected among the offered alternatives).
-  const directions = await mapboxDirections(ctx, [source, destination], { alternatives: true, signal });
+  const directions = await getDirections(ctx, [source, destination], { alternatives: true, steps: true, signal });
   let routeIndex = input.routeIndex ?? 0;
   if (routeIndex >= directions.routes.length) {
     warnings.push("The route option you picked isn't offered any more, so the fastest route was used.");
@@ -135,10 +142,41 @@ export async function recommend(
   lap("route");
 
   // 2. Corridor discovery.
-  const halfWidth = corridorHalfWidthM(preferences.maxDetourMinutes);
-  const discovery = await discoverVenues(ctx, geometry, halfWidth, signal);
+  const googleMode = ctx.restaurantSource === "google";
+  const halfWidth = googleMode ? (ctx.googlePlacesLimits?.corridorM ?? 200) : corridorHalfWidthM(preferences.maxDetourMinutes);
+  const discovery = googleMode ? await discoverGoogleVenues(ctx, geometry, halfWidth, signal) : await discoverVenues(ctx, geometry, halfWidth, signal);
   warnings.push(...discovery.diagnostics.warnings);
+  const inCorridor = discovery.venues.length;
   lap("discovery");
+
+  // Google search returns inexpensive identity fields. Enrich only a bounded,
+  // route-wide shortlist, before dietary/hours eligibility; never guess missing data.
+  let discoveryNotEvaluated = 0;
+  if (googleMode) {
+    const shortlist = selectForScreening(discovery.venues, baseline.distance, ctx.googlePlacesLimits?.details ?? 3);
+    discoveryNotEvaluated = discovery.venues.length - shortlist.length;
+    const details = await mapSettled(shortlist, 2, async (v) => {
+      const id = v.sources.find((source) => source.provider === "google")!.id;
+      return googleDetails(ctx, id, signal);
+    });
+    discovery.venues = shortlist.flatMap((v, index) => {
+      const detail = details[index]!;
+      if (!detail.ok) {
+        if (detail.error instanceof AppError && detail.error.code === "CANCELLED") throw detail.error;
+        warnings.push(`Details for ${v.name} could not be retrieved; food, ratings and hours may be unconfirmed.`);
+        return [{ ...v, ...(v.google ? { google: { ...v.google, detailsStatus: "unavailable" as const } } : {}) }];
+      }
+      const fresh = detail.value;
+      const pos = positionOnRoute(fresh.location, geometry);
+      // Details may correct coordinates or business status. Re-check both before routing.
+      if (pos.distanceM > halfWidth || ["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"].includes(fresh.google?.businessStatus ?? "")) {
+        exclude(v.id, fresh.name, pos.distanceM > halfWidth ? "verification" : "hours", pos.distanceM > halfWidth ? "The listing's updated location is outside the route corridor." : "The business is listed as temporarily or permanently closed.", 2);
+        return [];
+      }
+      return [{ ...v, ...fresh, id: v.id, sources: v.sources, hours: fresh.hours ? [fresh.hours] : [], vegetarianSource: fresh.vegetarian === "unknown" ? null : "google" as const, straightLineFromRouteM: Math.round(pos.distanceM), routePositionM: Math.round(pos.alongM) }];
+    });
+    lap("details");
+  }
 
   // 3. Cheap eligibility checks before spending routing quota.
   const eligible: Eligible[] = [];
@@ -151,6 +189,10 @@ export async function recommend(
     const cuisine = cuisineDecision(v.cuisineTags, v.venueType, preferences.cuisines);
     if (!cuisine.eligible) {
       exclude(v.id, v.name, "cuisine", cuisine.reason, 3);
+      continue;
+    }
+    if (assessBudget(preferences.budgetPerPersonInr, v.google?.priceRange) === "above-range") {
+      exclude(v.id, v.name, "budget", `Google's listed typical price range starts above your ₹${preferences.budgetPerPersonInr} per-person budget; individual menu prices may differ.`, 3);
       continue;
     }
     // Pre-check hours only when the place is closed across a +/-20 min window
@@ -174,7 +216,7 @@ export async function recommend(
     baseline.distance,
     RECOMMEND_LIMITS.screenMax
   );
-  let notEvaluated = eligible.length - selected.length;
+  let notEvaluated = discoveryNotEvaluated + eligible.length - selected.length;
   const routedTo = (v: CorridorVenue): LngLat => v.accessPoint ?? v.location;
   const shortlist: Array<Eligible & { estimatedExtraSec: number }> = [];
   if (selected.length > 0) {
@@ -212,7 +254,7 @@ export async function recommend(
     : [];
   lap("verification");
 
-  const candidates: Array<RankInput & { rec: Omit<Recommendation, "rank"> }> = [];
+  const candidates: Array<RankInput & { rec: Omit<Recommendation<Provider>, "rank"> }> = [];
   verified.forEach((r, i) => {
     const e = toVerify[i]!;
     const v = e.venue;
@@ -245,10 +287,16 @@ export async function recommend(
       exclude(v.id, v.name, "hours", `Listed hours show it closed when you'd arrive (${arrivalLabel(arrival)}).`, 2);
       return;
     }
+    const mealPeriod = mealPeriodAt(arrival);
+    const meal = mealRecommendation(mealPeriod, v.google?.meals, v.cuisineTags, v.venueType, preferences.cuisines);
+    if (meal.service === "not-listed") {
+      exclude(v.id, v.name, "meal", `The listing indicates this restaurant does not serve ${mealPeriod}${mealPeriod === "breakfast" ? " or brunch" : ""}.`, 2);
+      return;
+    }
     const basis = v.accessPoint ? "provider-access-point" : "listing-coordinate";
     const confidence = via.snapDistanceM <= (basis === "provider-access-point" ? 50 : 35) ? "good" : "uncertain";
     const access = { basis, snapDistanceM: via.snapDistanceM, confidence } as const;
-    const mealPeriod = mealPeriodAt(arrival);
+    const routeAssessment = assessRoute(geometry, baseline.legs, via, v.location);
     const { facts, uncertainties } = explain({
       extraTimeSec: extraSec,
       arrivalLabel: arrivalLabel(arrival),
@@ -260,7 +308,28 @@ export async function recommend(
       mealPeriod,
       cuisineMatched: e.cuisineMatched,
     });
-    const rec: Omit<Recommendation, "rank"> = {
+    const budget = assessBudget(preferences.budgetPerPersonInr, v.google?.priceRange);
+    if (budget === "likely-within") facts.push("Google's typical price range falls within your per-person budget; actual menu prices may differ.");
+    else if (budget === "unconfirmed") uncertainties.push("The listed typical price range doesn't confirm whether this stop fits your per-person budget. Check the menu.");
+    if (routeAssessment.uTurns.additionalToBaseline === "possible") {
+      uncertainties.push("The router reports a U-turn not matched to the selected baseline route. Check the driving directions.");
+    } else if (routeAssessment.uTurns.status === "unknown") {
+      uncertainties.push("Turn-by-turn information is incomplete, so U-turns could not be assessed.");
+    } else if (routeAssessment.uTurns.status === "reported" && routeAssessment.uTurns.additionalToBaseline === "unknown") {
+      uncertainties.push("The router reports a U-turn, but it is unclear whether the stop adds it to the selected route.");
+    }
+    if (routeAssessment.backwardTravelNearStop.status === "possible") {
+      uncertainties.push(`The route appears to travel about ${routeAssessment.backwardTravelNearStop.estimatedMetres} m backward along the selected route near this stop. Check the driving directions.`);
+    }
+    if (routeAssessment.routeDivergence.status === "possible") {
+      uncertainties.push("The journey via this stop differs substantially from your selected route; its extra time compares complete journeys and may not describe a local detour.");
+    }
+    if (v.google) {
+      if (meal.service === "listed") facts.push(`Google's listing indicates ${mealPeriod === "snacks" ? "coffee or dessert service" : mealPeriod === "breakfast" ? "breakfast or brunch service" : `${mealPeriod} service`}; specific dishes and availability are not confirmed.`);
+      else uncertainties.push(`Food availability around ${mealPeriod} time is unconfirmed.`);
+      if (!v.google.businessStatus) uncertainties.push("The listing's current business status is unknown.");
+    }
+    const rec: Omit<Recommendation<Provider>, "rank"> = {
       id: v.id,
       name: v.name,
       venueType: v.venueType,
@@ -286,9 +355,13 @@ export async function recommend(
       },
       diet: { vegetarian: v.vegetarian, source: v.vegetarianSource },
       mealPeriod,
+      mealRecommendation: meal,
+      budgetAssessment: { status: budget === "above-range" ? "unconfirmed" : budget, budgetPerPersonInr: preferences.budgetPerPersonInr ?? null },
       viaRoute: { geometry: simplifyLine(via.geometry), durationSec: Math.round(via.durationSec), distanceM: Math.round(via.distanceM) },
       facts,
       uncertainties,
+      routeAssessment,
+      ...(v.google ? { google: v.google } : {}),
     };
     candidates.push({
       id: v.id,
@@ -298,22 +371,25 @@ export async function recommend(
       accessConfidence: confidence,
       vegetarian: v.vegetarian,
       straightLineFromRouteM: v.straightLineFromRouteM,
+      possibleAdditionalUTurn: routeAssessment.uTurns.additionalToBaseline === "possible",
+      possibleBackwardTravel: routeAssessment.backwardTravelNearStop.status === "possible",
       rec,
     });
   });
 
-  const ordered: Recommendation[] = sortByRankingCost(candidates, preferences.diet).map((c, i) => ({ ...c.rec, rank: i + 1 }));
+  const ordered: Recommendation<Provider>[] = sortByRankingCost(candidates, preferences.diet).map((c, i) => ({ ...c.rec, rank: i + 1 }));
   lap("ranking");
 
   if (notEvaluated > 0) {
     warnings.push(
-      `${notEvaluated} more place${notEvaluated === 1 ? "" : "s"} along your route ${notEvaluated === 1 ? "wasn't" : "weren't"} checked in detail because each search has a fixed free routing budget.`
+      `${notEvaluated} more place${notEvaluated === 1 ? "" : "s"} along your route ${notEvaluated === 1 ? "wasn't" : "weren't"} checked in detail within this search's configured request limits.`
     );
   }
 
   const usedProviders = new Set<Provider>();
   for (const v of discovery.venues) for (const s of v.sources) usedProviders.add(s.provider);
-  const attribution = ["© Mapbox", "© OpenStreetMap contributors"];
+  const attribution = ctx.routingProvider === "google" ? [`Powered by Google, ©${new Date().getFullYear()} Google`, "© OpenStreetMap contributors"] : ["© Mapbox", "© OpenStreetMap contributors"];
+  if (googleMode) attribution.push("Google Maps");
   if (usedProviders.has("geoapify") || discovery.diagnostics.providers.geoapify === "ok") attribution.push("Powered by Geoapify");
 
   const departureIso = departure.toISOString();
@@ -348,7 +424,7 @@ export async function recommend(
         truncated: discovery.diagnostics.saturatedAfterRefinement,
       },
       discovered: discovery.diagnostics.discovered,
-      inCorridor: discovery.venues.length,
+      inCorridor,
       screened: selected.length,
       verified: verified.filter((r) => r.ok).length,
       notEvaluated,

@@ -7,6 +7,9 @@ import type { ApiErrorBody, ApiErrorCode } from "./contract/api.js";
 export type ErrorCode = ApiErrorCode;
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
+  UNAUTHENTICATED: 401,
+  FORBIDDEN: 403,
+  AUTH_FAILED: 401,
   BAD_REQUEST: 400,
   OUT_OF_COVERAGE: 422,
   NO_ROUTE: 422,

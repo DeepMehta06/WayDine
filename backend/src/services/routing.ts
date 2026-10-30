@@ -12,9 +12,16 @@
  */
 import type { LngLat } from "../contract/api.js";
 import { AppError } from "../errors.js";
+import { haversineM } from "../lib/geo.js";
 import { mapSettled } from "../lib/http.js";
 import type { ProviderContext } from "../providers/context.js";
 import { mapboxDirections, mapboxMatrix, MATRIX_MAX_COORDINATES, type DirectionsResult } from "../providers/mapbox.js";
+import { googleDirections, googleMatrix } from "../providers/googleRoutes.js";
+
+export const directions = (ctx: ProviderContext, points: LngLat[], opts: { approaches?: Array<"unrestricted" | "curb">; alternatives?: boolean; steps?: boolean; signal?: AbortSignal }) =>
+  ctx.routingProvider === "google" ? googleDirections(ctx, points, opts) : mapboxDirections(ctx, points, opts);
+const matrix = (ctx: ProviderContext, points: LngLat[], sources: number[], destinations: number[], opts: { approaches?: Array<"unrestricted" | "curb">; signal?: AbortSignal }) =>
+  ctx.routingProvider === "google" ? googleMatrix(ctx, points, sources, destinations, opts) : mapboxMatrix(ctx, points, sources, destinations, opts);
 
 export interface Screened {
   index: number;
@@ -44,10 +51,10 @@ export async function screenByMatrix(
     const approaches = coords.map((_, i) => (i === 0 || i === destIdx ? "unrestricted" : "curb")) as Array<"unrestricted" | "curb">;
 
     const [outbound, inbound] = await Promise.all([
-      mapboxMatrix(ctx, coords, [0], [...stopIdx, destIdx], { approaches, signal }),
-      mapboxMatrix(ctx, coords, stopIdx, [destIdx], { approaches, signal }),
+      matrix(ctx, coords, [0], [...stopIdx, destIdx], { approaches, signal }),
+      matrix(ctx, coords, stopIdx, ctx.routingProvider === "google" ? [destIdx, 0] : [destIdx], { approaches, signal }),
     ]);
-    elements += stopIdx.length + 1 + stopIdx.length;
+    elements += stopIdx.length + 1 + stopIdx.length * (ctx.routingProvider === "google" ? 2 : 1);
     const direct = outbound[0]![stopIdx.length];
     if (direct === null || direct === undefined) {
       throw new AppError("NO_ROUTE", "No drivable route connects your start and destination.");
@@ -73,18 +80,26 @@ export interface ViaRoute {
   geometry: LngLat[];
   /** Straight-line distance between the requested stop coordinate and where routing reached the road. */
   snapDistanceM: number;
+  stopOnRoad: LngLat;
+  toStopDistanceM: number;
+  legs: DirectionsResult["routes"][number]["legs"];
 }
 
-export function viaRouteFrom(result: DirectionsResult): ViaRoute {
+export function viaRouteFrom(result: DirectionsResult, requestedStop: LngLat): ViaRoute {
   const route = result.routes[0]!;
   const firstLeg = route.legs[0];
-  if (!firstLeg) throw new AppError("UPSTREAM_UNAVAILABLE", "Route details came back incomplete.");
+  const stop = result.waypoints[1];
+  if (!firstLeg || route.legs.length < 2 || !stop) throw new AppError("UPSTREAM_UNAVAILABLE", "Route details came back incomplete.");
   return {
     durationSec: route.duration,
     distanceM: route.distance,
     toStopSec: firstLeg.duration,
     geometry: route.geometry.coordinates,
-    snapDistanceM: Math.round(result.waypoints[1]?.distance ?? 0),
+    // If the provider omits distance, derive it from its snapped coordinate.
+    snapDistanceM: Math.round(stop.distance !== undefined && stop.distance >= 0 ? stop.distance : haversineM(requestedStop, stop.location)),
+    stopOnRoad: stop.location,
+    toStopDistanceM: firstLeg.distance,
+    legs: route.legs,
   };
 }
 
@@ -96,11 +111,12 @@ export async function verifyStops(
   signal?: AbortSignal
 ): Promise<Array<{ ok: true; via: ViaRoute } | { ok: false; error: unknown }>> {
   const settled = await mapSettled(stops, 3, async (stop) => {
-    const result = await mapboxDirections(ctx, [source, stop, destination], {
+    const result = await directions(ctx, [source, stop, destination], {
       approaches: ["unrestricted", "curb", "unrestricted"],
+      steps: true,
       signal,
     });
-    return viaRouteFrom(result);
+    return viaRouteFrom(result, stop);
   });
   return settled.map((r) => {
     if (!r.ok && r.error instanceof AppError && r.error.code === "CANCELLED") throw r.error;

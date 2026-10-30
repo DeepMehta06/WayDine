@@ -4,13 +4,15 @@
  * "match" score is produced: there is no calibrated quality signal (neither
  * data source supplies ratings or reviews), so none is implied.
  */
-import type { DietPreference, MealPeriod, Provider, VegetarianEvidence } from "../contract/api.js";
+import type { DietPreference, MealPeriod, RestaurantProvider as Provider, VegetarianEvidence } from "../contract/api.js";
 
 export const RANKING_PENALTIES_SEC = {
   hoursUnknown: 180,
   accessUncertain: 120,
   dietUnconfirmed: 240,
   closesWithin30Min: 300,
+  possibleAdditionalUTurn: 90,
+  possibleBackwardTravel: 120,
 } as const;
 
 export interface RankInput {
@@ -21,6 +23,8 @@ export interface RankInput {
   accessConfidence: "good" | "uncertain";
   vegetarian: VegetarianEvidence;
   straightLineFromRouteM: number;
+  possibleAdditionalUTurn?: boolean;
+  possibleBackwardTravel?: boolean;
 }
 
 export function rankingCostSec(input: RankInput, diet: DietPreference): number {
@@ -29,6 +33,8 @@ export function rankingCostSec(input: RankInput, diet: DietPreference): number {
   if (input.closesWithinMinutes !== null && input.closesWithinMinutes <= 30) cost += RANKING_PENALTIES_SEC.closesWithin30Min;
   if (input.accessConfidence === "uncertain") cost += RANKING_PENALTIES_SEC.accessUncertain;
   if (diet !== "any" && input.vegetarian === "unknown") cost += RANKING_PENALTIES_SEC.dietUnconfirmed;
+  if (input.possibleAdditionalUTurn) cost += RANKING_PENALTIES_SEC.possibleAdditionalUTurn;
+  if (input.possibleBackwardTravel) cost += RANKING_PENALTIES_SEC.possibleBackwardTravel;
   return cost;
 }
 
@@ -45,6 +51,7 @@ export function sortByRankingCost<T extends RankInput>(items: T[], diet: DietPre
 const PROVIDER_LABEL: Record<Provider, string> = {
   geoapify: "OpenStreetMap (via Geoapify)",
   mapbox: "Mapbox",
+  google: "Google Maps",
 };
 
 export function formatMinutes(sec: number): string {
@@ -98,9 +105,10 @@ export function explain(input: ExplainInput): { facts: string[]; uncertainties: 
   if (input.access.confidence === "good") {
     facts.push(
       input.access.basis === "provider-access-point"
-        ? "The route reaches the listing's access point on your side of the road."
+        ? "The driving route reaches near the listing's access point."
         : "The route reaches the road right next to the listed location."
     );
+    uncertainties.push("The routing snap does not confirm the entrance or whether crossing the road is necessary.");
   } else {
     uncertainties.push(
       `The nearest drivable point found is about ${input.access.snapDistanceM} m from the ${

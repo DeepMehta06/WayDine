@@ -6,6 +6,8 @@ export const STAGE_LABEL: Record<ExclusionStage, string> = {
   hours: "Closed when you'd arrive",
   diet: "Doesn't meet your food choice",
   cuisine: "Cuisine doesn't match",
+  meal: "Meal service not listed",
+  budget: "Typical price above budget",
   unreachable: "No drivable access found",
   verification: "Couldn't be checked right now",
 };
@@ -23,7 +25,7 @@ export function WhyExcluded({ data, defaultOpen = false }: { data: RecommendResp
       <div className="flex flex-col gap-3 border-t border-border px-3 py-3 text-muted-foreground">
         <p>
           Found {d.inCorridor} listed food place{d.inCorridor === 1 ? "" : "s"} within {formatDistance(d.corridorHalfWidthM)} of your route (from{" "}
-          {d.discovered.geoapify} OpenStreetMap and {d.discovered.mapbox} Mapbox listings, after merging duplicates). Checked travel time to{" "}
+          {d.discovered.google ?? 0} Google Maps listings). Checked travel time to{" "}
           {d.screened}, and routed {d.verified} in full to their entrances.
         </p>
         {d.notEvaluated > 0 && (
@@ -61,7 +63,7 @@ export function WhyExcluded({ data, defaultOpen = false }: { data: RecommendResp
         )}
         <p className="text-xs">
           Ranking: least extra driving first, with a documented penalty for each missing piece of evidence (unlisted hours, unclear
-          entrance, unconfirmed diet). Neither data source provides ratings or reviews, so quality isn't ranked.
+          entrance, unconfirmed diet). Ratings are not used in ranking.
         </p>
       </div>
     </details>

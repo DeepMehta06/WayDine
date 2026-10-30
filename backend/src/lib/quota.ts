@@ -11,6 +11,10 @@ import { log } from "./log.js";
 
 export type BudgetBucket =
   | "geoapify_credits"
+  | "google_places_nearby"
+  | "google_places_details"
+  | "google_routes"
+  | "google_route_matrix_elements"
   | "mapbox_geocode"
   | "mapbox_searchbox"
   | "mapbox_directions"
@@ -35,15 +39,16 @@ export class QuotaManager {
   private writeTimer: NodeJS.Timeout | null = null;
 
   constructor(
-    private readonly limits: Record<BudgetBucket, number>,
+    private readonly limits: Partial<Record<BudgetBucket, number>>,
     private readonly stateFile: string | null,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    private readonly period: "day" | "month" = "day"
   ) {
     this.state = this.load();
   }
 
   private load(): PersistedState {
-    const fresh: PersistedState = { day: istDayKey(this.now()), used: {} };
+    const fresh: PersistedState = { day: this.periodKey(), used: {} };
     if (!this.stateFile) return fresh;
     try {
       const parsed = JSON.parse(readFileSync(this.stateFile, "utf8")) as PersistedState;
@@ -57,9 +62,11 @@ export class QuotaManager {
   }
 
   private rollover(): void {
-    const today = istDayKey(this.now());
+    const today = this.periodKey();
     if (this.state.day !== today) this.state = { day: today, used: {} };
   }
+
+  private periodKey(): string { return this.period === "month" ? istDayKey(this.now()).slice(0, 7) : istDayKey(this.now()); }
 
   private schedulePersist(): void {
     if (!this.stateFile || this.writeTimer) return;
@@ -84,7 +91,7 @@ export class QuotaManager {
 
   remaining(bucket: BudgetBucket): number {
     this.rollover();
-    return Math.max(0, this.limits[bucket] - (this.state.used[bucket] ?? 0));
+    return Math.max(0, (this.limits[bucket] ?? 0) - (this.state.used[bucket] ?? 0));
   }
 
   canAfford(bucket: BudgetBucket, units: number): boolean {
@@ -97,8 +104,8 @@ export class QuotaManager {
     if (!this.canAfford(bucket, units)) {
       throw new AppError(
         "QUOTA_EXCEEDED",
-        "Today's free usage allowance for map data has been used up. Please try again tomorrow.",
-        { retryAfterSec: secondsUntilIstMidnight(this.now()), diagnostic: `bucket=${bucket}` }
+        this.period === "month" ? "This month's configured map-data request budget has been used up." : "Today's configured map-data request budget has been used up. Please try again tomorrow.",
+        { retryAfterSec: this.period === "month" ? secondsUntilIstMonth(this.now()) : secondsUntilIstMidnight(this.now()), diagnostic: `bucket=${bucket}` }
       );
     }
     this.state.used[bucket] = (this.state.used[bucket] ?? 0) + units;
@@ -109,7 +116,7 @@ export class QuotaManager {
     this.rollover();
     const buckets = {} as Record<BudgetBucket, { used: number; limit: number }>;
     for (const key of Object.keys(this.limits) as BudgetBucket[]) {
-      buckets[key] = { used: this.state.used[key] ?? 0, limit: this.limits[key] };
+      buckets[key] = { used: this.state.used[key] ?? 0, limit: this.limits[key] ?? 0 };
     }
     return { day: this.state.day, buckets };
   }
@@ -120,6 +127,12 @@ export function secondsUntilIstMidnight(now: Date): number {
   const istMs = now.getTime() + istOffsetMs;
   const msIntoDay = ((istMs % 86_400_000) + 86_400_000) % 86_400_000;
   return Math.ceil((86_400_000 - msIntoDay) / 1000);
+}
+
+export function secondsUntilIstMonth(now: Date): number {
+  const offset = 330 * 60_000;
+  const local = new Date(now.getTime() + offset);
+  return Math.ceil((Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1) - offset - now.getTime()) / 1000);
 }
 
 /** Sliding-window limiter per client key (IP) and route. In-memory, bounded size. */

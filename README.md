@@ -6,19 +6,55 @@ anything just nearby.
 
 Full build plan: [WayDine-Build-Plan.pdf](WayDine-Build-Plan.pdf) (tech stack, schema, pipeline, execution plan).
 
+## Google sign-in (backend)
+
+Google OAuth, encrypted server-side sessions, and user profiles are implemented
+through Supabase. Setup, migration, API endpoints, and manual verification:
+[Google authentication guide](docs/GOOGLE_AUTH.md).
+Authentication is opt-in (`AUTH_ENABLED=true`) after configuration and is
+required for Google restaurant recommendations.
+
+## Google Places (backend, opt-in)
+
+The backend has separate, authenticated Google restaurant/detail endpoints with
+200 m corridor filtering, bounded enrichment, and daily/monthly request limits.
+They are disabled by default. The frontend uses the authenticated Google
+recommendation endpoint when enabled.
+See [Google Places setup and testing rules](docs/GOOGLE_PLACES.md).
+Obtain user approval before any live Google Places test; automated tests use mocks.
+
+## Google map display (optional)
+
+Enable the Maps JavaScript API in Google Cloud and add a browser-restricted key
+as `VITE_GOOGLE_MAPS_API_KEY` in `frontend/.env`, then restart the frontend.
+The map uses Google Maps; without the key the map is unavailable.
+Restrict the browser key to your site's HTTP referrers and the Maps JavaScript
+API. Map loads have their own usage and billing limits. Enable the Routes API
+and set `GOOGLE_ROUTES_API_KEY` in `backend/.env` using a server-restricted key.
+The backend uses Google Routes for routing and route matrix calculations, with
+daily limits controlled by `GOOGLE_ROUTES_PER_DAY` and
+`GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY`. Side-of-road requests may be billed at
+a higher rate; review the Google Cloud quotas and pricing. The Google Places
+integration requires Google sign-in and `GOOGLE_PLACES_ENABLED=true`.
+
+## Saved user preferences (backend)
+
+Google-authenticated accounts can read, update and reset their dietary, cuisine,
+detour and food-budget defaults. Apply migration 005 after migration 004.
+See [user preferences setup and API](docs/USER_PREFERENCES.md).
+
 ## Structure
 
 ```
 backend/   Express + TypeScript API (/api/recommend, /api/restaurants, /api/health)
-frontend/  React + Vite + TypeScript PWA (Tailwind, shadcn/ui, Mapbox GL)
+frontend/  React + Vite + TypeScript PWA (Tailwind, shadcn/ui, Google Maps)
 ```
 
 ## Setup
 
-1. **Mapbox**: create an access token at mapbox.com with Directions, Matrix,
-   and Search Box API access. The same token works for both the frontend
-   (public, scoped to your domain before the demo) and the backend secret
-   token (Directions + Matrix + Search Box APIs).
+1. **Maps and routing**: configure Google Maps and Google Routes as described
+   above. Geoapify is used by the existing place search and restaurant
+   discovery endpoints; Mapbox search is disabled for the Google map.
 2. **Supabase** (optional): only used to log `search_history` for analytics —
    not required for recommendations to work. If you want it, create a project
    and run `backend/sql/001_schema.sql` in the SQL editor for the
@@ -35,44 +71,72 @@ frontend/  React + Vite + TypeScript PWA (Tailwind, shadcn/ui, Mapbox GL)
 
 ## Restaurant data source
 
-Restaurants are sourced **live** from Mapbox's Search Box category API, queried
-at points sampled every ~15km along the route (up to 8 samples, capped at 23
-total candidates — the Mapbox Matrix API's per-request limit minus source and
-destination). This works for any route in India without manual seeding, unlike
-an earlier version of this project that relied on a hand-curated Supabase
-table covering only one highway corridor.
-
-The tradeoff: live POI data doesn't reliably carry cuisine tags or vegetarian
-flags for small highway restaurants (Mapbox's categories are coarse, e.g.
-"indian restaurant" rather than a dietary tag). Opening hours, however, Mapbox
-*does* provide via `metadata.open_hours` on most results — parsed back into
-real `isOpenAt()` checks, same as the original curated-DB design. Where a
-specific place has no hours data, the pipeline treats it as **unknown, not
-negative**: not excluded, not boosted either (`openAtArrival: null`, shown as
-"hours unconfirmed" rather than guessed).
-
-(Evaluated Geoapify's Places API as an alternative — slightly better cuisine
-tags, but fewer results per area and no clear win over Mapbox once the hours
-metadata above was wired in, so stuck with one provider.)
+The frontend uses Google Places for restaurants and Geoapify for location
+search. Data such as dietary options and opening hours can be
+missing; the backend reports uncertainty rather than assuming it is available.
 
 ## Recommendation pipeline (`/api/recommend`)
 
-1. **Route + live restaurant search** — Mapbox Directions for the real route
-   geometry, then Mapbox Search Box category search at sampled points along
-   it, filtered to within 400m of the route (haversine distance to the
-   nearest polyline point; wider than a curated-DB radius since live
-   coordinates are less precise).
-2. **Direction + side-of-road** — cross-product classification of each
-   candidate against the local travel vector; restaurants requiring a U-turn
-   are excluded, not just down-ranked.
-3. **Candidate graph + Dijkstra** — real Mapbox driving-time edges between
-   source, candidates, and destination; Dijkstra computes the true detour
-   cost (ΔT), not straight-line distance.
-4. **Time-aware meal recommendation** — arrival time → recommended meal type
-   (breakfast/lunch/snacks/dinner, including the overnight wraparound).
-5. **Exclude + rank** — hard exclusions first (wrong side, over detour
-   budget, confirmed non-veg when vegetarian-only is set), then weighted
-   scoring: detour 45%, food match 30%, timing 15%, proximity 10%.
+An experimental OSM directed-graph and Dijkstra core lives in `backend/src/graph`.
+It accepts supplied OSM JSON, estimates road weights, snaps points to segments,
+and handles supported node-based turn restrictions. The **Show WayDine graph
+route** control plots its calculated route in blue on the Google map after
+the start and destination are selected, without a restaurant search.
+After a recommendation search, selecting a stop allows a graph route via it.
+This is a separate preview: recommendation ranking, arrival times and the other
+route lines still use Google routing. It is not yet connected to recommendations.
+It does not fetch OSM data, guarantee access, handle all
+restrictions, or fetch traffic data. The graph can apply fresh, direction-specific
+traffic speeds or closures supplied by an adapter; missing or stale observations
+fall back to estimated speeds and the route reports the distance covered by each.
+The snapshot is a current estimate, not a forecast for future departures.
+Integration requires road extract
+coverage, safe snapping, performance work, and validation; graph detour and
+baseline costs must use the same graph and weight model.
+
+To enable the preview, export an Overpass JSON extract with road ways, referenced
+nodes and turn restriction relations for the complete area you want to test.
+Set `OSM_GRAPH_PATH` in `backend/.env` to the local JSON file and restart the
+backend. Files are limited to 30 MB and 200,000 nodes. This initial preview is
+for planning only: no live traffic is connected, graph snapping and restrictions
+may be incomplete, and Google navigation may choose a different route. Display
+the OpenStreetMap attribution included with the route. Do not use the preview
+for live navigation.
+
+Alternatively, set `OSM_GRAPH_SOURCE=overpass` to request OSM road data when
+the user asks for a graph preview. One query covers a 3 km corridor around the
+straight line between the chosen trip endpoints (not Google's route); restaurant
+coordinates are snapped locally and are not sent to Overpass. There is no retry.
+The request is limited to 200 km, 30 MB and 200,000 nodes, and may fail or omit
+valid detours outside that corridor. Public Overpass availability is not guaranteed.
+Set `OSM_GRAPH_SOURCE=file` to use the configured local extract instead.
+
+For a small Mira Road–Borivali test extract, run the following in
+[Overpass Turbo](https://overpass-turbo.eu/) and use **Export → raw data → download**:
+
+```overpass
+[out:json][timeout:90];
+way[highway](19.19,72.80,19.32,72.95)->.roads;
+(.roads; rel(bw.roads)[type=restriction];);
+(._; >;);
+out body;
+```
+
+Save the result as `backend/.data/osm-demo.json`, set
+`OSM_GRAPH_PATH=.data/osm-demo.json` in `backend/.env`, and restart the backend.
+This bounding box does not cover Mumbai–Pune. An extract must cover the whole
+route and possible detours; an absent path is not proof that a road is unreachable.
+
+1. **Discover** — obtain a Mapbox driving route and search for food places
+   along it; the opt-in Google route uses a 200 m point-to-polyline corridor.
+2. **Screen and verify** — apply food preferences, estimate detours with Matrix,
+   then verify shortlisted stops as complete via-stop driving journeys.
+3. **Assess access** — estimate local route side and bearing; compare reported
+   U-turn maneuvers, sample for possible backward travel near the stop, and flag
+   substantially different via routes. These are evidence, not safety guarantees.
+4. **Filter and rank** — exclude confirmed closed, unreachable or over-detour-limit
+   stops; rank by added driving time plus penalties for uncertainty, likely
+   additional U-turns and possible backward travel. Meal labels use arrival time.
 
 Excluded candidates are returned with reasons (`excluded[]`), not silently
 dropped — that's what powers the no-results state honestly.

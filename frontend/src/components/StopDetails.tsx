@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, ExternalLink, Navigation, Phone, Globe, CircleCheck, CircleHelp } from "lucide-react";
-import type { LngLat, Provider, Recommendation, RecommendResponse } from "@contract";
+import type { LngLat, RestaurantProvider, Recommendation, RecommendResponse } from "@contract";
 import { Button } from "@/components/ui/button";
 import { formatDistance, formatDuration, formatExtra, formatWhen } from "@/lib/format";
 
@@ -13,7 +13,7 @@ interface StopDetailsProps {
   onBack: () => void;
 }
 
-const PROVIDER_NAME: Record<Provider, string> = { mapbox: "Mapbox", geoapify: "OpenStreetMap" };
+const PROVIDER_NAME: Record<RestaurantProvider, string> = { mapbox: "Mapbox", geoapify: "OpenStreetMap", google: "Google Maps" };
 const latLng = ([lng, lat]: LngLat) => `${lat.toFixed(6)},${lng.toFixed(6)}`;
 
 /** Hand-off links only: these open the user's map app; no third-party API is called. */
@@ -29,7 +29,7 @@ export function StopDetails({ rec, data, source, destination, destinationName, o
 
   const hours = rec.openingHours;
   const delay = new Date(rec.destinationArrivalTime).getTime() - new Date(data.route.arrivalTime).getTime();
-  const osm = rec.sources.find((s) => s.url);
+  const osm = rec.sources.find((s) => s.provider === "geoapify" && s.url);
 
   return (
     <article aria-labelledby="stop-title" className="flex flex-col gap-4">
@@ -46,6 +46,7 @@ export function StopDetails({ rec, data, source, destination, destinationName, o
           {[rec.venueType, ...rec.cuisines].filter(Boolean).join(" · ") || "Food place"}
         </p>
         {rec.address && <p className="mt-1 text-sm text-muted-foreground">{rec.address}</p>}
+        {rec.google && <p translate="no" className="mt-1 whitespace-nowrap font-sans text-xs font-normal text-[#5e5e5e]">Google Maps</p>}
       </header>
 
       <div className="flex flex-wrap gap-2">
@@ -156,7 +157,9 @@ export function StopDetails({ rec, data, source, destination, destinationName, o
             </a>
           )}
         </p>
-        <p className="mt-1">No ratings or reviews are available from these sources.</p>
+        {rec.google?.rating != null && <p className="mt-1">Google rating: {rec.google.rating} / 5{rec.google.userRatingCount != null ? ` (${rec.google.userRatingCount} ratings)` : ""}.</p>}
+        {rec.google?.googleMapsUri && <p className="mt-1"><a href={rec.google.googleMapsUri} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">View on Google Maps</a></p>}
+        {rec.google?.attributions.map((attribution, index) => <p key={`${attribution.provider}-${index}`} className="mt-1">{attribution.providerUri ? <a href={attribution.providerUri} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2">{attribution.provider}</a> : attribution.provider}</p>)}
       </section>
     </article>
   );

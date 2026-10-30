@@ -1,17 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Map as MapIcon, RotateCw, X } from "lucide-react";
-import type { LngLat, RecommendRequest } from "@contract";
+import type { AuthUser, LngLat, RecommendRequest } from "@contract";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ResultsPanel } from "@/components/ResultsPanel";
-import { SearchForm, validateTrip, type EndpointInput } from "@/components/SearchForm";
+import { SearchForm, type EndpointInput } from "@/components/SearchForm";
 import { StopDetails } from "@/components/StopDetails";
 import { TripSummary } from "@/components/TripSummary";
 import { useLenis } from "@/hooks/useLenis";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useRecommend } from "@/hooks/useRecommend";
-import { reversePlace } from "@/lib/api";
+import { ApiError, fetchGraphPreview, getAccount, getPreferences, googleSignInUrl, reversePlace, signOut, type GraphPreview } from "@/lib/api";
 import { istLocalInputToIso } from "@/lib/format";
 import { decodeTrip, DEFAULT_PREFERENCES, encodeTrip, type SelectedPlace, type TripPreferences } from "@/lib/search-state";
 import { cn } from "@/lib/utils";
@@ -51,10 +51,38 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(true);
   const [mapHidden, setMapHidden] = useState(false);
   const [mapCenter, setMapCenter] = useState<LngLat | null>(null);
+  const [account, setAccount] = useState<AuthUser | null>(null);
+  const [accountLoading, setAccountLoading] = useState(true);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [graphPreview, setGraphPreview] = useState<GraphPreview | null>(null);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const graphRequest = useRef<AbortController | null>(null);
+  const preferencesEdited = useRef(false);
   const search = useRecommend();
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const scrollRef = useLenis(isDesktop);
   const asideRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const { user } = await getAccount();
+        if (!active) return;
+        setAccount(user);
+        try {
+          const { preferences } = await getPreferences();
+          if (active && !preferencesEdited.current && !decodeTrip(window.location.hash)) {
+            setPrefs((current) => ({ ...current, diet: preferences.diet, cuisines: preferences.cuisines, includeUnconfirmedDiet: preferences.includeUnconfirmedDiet, maxDetourMinutes: preferences.maxDetourMinutes }));
+          }
+        } catch { if (active) setAccountError("Couldn't load your saved preferences. You can still choose them for this trip."); }
+      } catch (err) {
+        if (active && (!(err instanceof ApiError) || err.code !== "UNAUTHENTICATED")) setAccountError(err instanceof Error ? err.message : "Couldn't check sign-in status.");
+      } finally { if (active) setAccountLoading(false); }
+    })();
+    return () => { active = false; };
+  }, []);
 
   const run = useCallback(
     (s: SelectedPlace, d: SelectedPlace, p: TripPreferences, routeIndex?: number) => {
@@ -73,9 +101,7 @@ export default function App() {
     setSource({ text: shared.source.name, place: shared.source });
     setDestination({ text: shared.destination.name, place: shared.destination });
     setPrefs(shared.prefs);
-    if (Object.keys(validateTrip({ text: "x", place: shared.source }, { text: "x", place: shared.destination }, shared.prefs)).length === 0) {
-      run(shared.source, shared.destination, shared.prefs);
-    }
+    // Restoring a shared link must not automatically consume Places quota.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Collapse the form once results arrive so they get the space, especially on phones.
@@ -87,10 +113,12 @@ export default function App() {
   }, [search.status, search.data?.requestId]);
 
   function submit() {
+    if (!account) { setAccountError("Sign in with Google before searching for restaurants."); return; }
     if (source.place && destination.place) run(source.place, destination.place, prefs);
   }
 
   function adjust(patch: Partial<TripPreferences>) {
+    preferencesEdited.current = true;
     const next = { ...prefs, ...patch };
     setPrefs(next);
     if (source.place && destination.place) run(source.place, destination.place, next);
@@ -131,6 +159,25 @@ export default function App() {
   const data = search.data;
   const snapshot = search.snapshot;
   const selected = data?.recommendations.find((r) => r.id === selectedId) ?? null;
+  useEffect(() => {
+    graphRequest.current?.abort(); graphRequest.current = null;
+    setGraphPreview(null); setGraphError(null); setGraphLoading(false);
+  }, [data?.requestId, selectedId, source.place?.coordinates, destination.place?.coordinates]);
+  useEffect(() => () => graphRequest.current?.abort(), []);
+
+  async function showGraphRoute() {
+    if (!source.place || !destination.place) return;
+    graphRequest.current?.abort();
+    const controller = new AbortController(); graphRequest.current = controller;
+    setGraphLoading(true); setGraphError(null); setGraphPreview(null);
+    try {
+      const selectedForTrip = snapshot && samePoint(source.place.coordinates, snapshot.request.source) && samePoint(destination.place.coordinates, snapshot.request.destination) ? selected : null;
+      const result = await fetchGraphPreview({ source: source.place.coordinates, destination: destination.place.coordinates, ...(selectedForTrip ? { stop: selectedForTrip.routedTo } : {}) }, controller.signal);
+      if (!controller.signal.aborted) setGraphPreview(result);
+    } catch (err) {
+      if (!controller.signal.aborted) setGraphError(err instanceof Error ? err.message : "The WayDine route couldn't be calculated.");
+    } finally { if (!controller.signal.aborted) setGraphLoading(false); }
+  }
   const tripChanged = Boolean(
     snapshot &&
       (!samePoint(source.place?.coordinates, snapshot.request.source) || !samePoint(destination.place?.coordinates, snapshot.request.destination))
@@ -146,6 +193,11 @@ export default function App() {
   const loading = search.status === "loading";
   const error = search.error;
 
+  async function logout() {
+    try { await signOut(); setAccount(null); setAccountError(null); resetAll(); }
+    catch (err) { setAccountError(err instanceof Error ? err.message : "Couldn't sign out."); }
+  }
+
   return (
     <div className="flex min-h-dvh flex-col md:h-dvh md:flex-row">
       <main
@@ -160,6 +212,7 @@ export default function App() {
               source={source.place}
               destination={destination.place}
               route={tripChanged ? null : (data?.route.geometry ?? null)}
+              graphRoute={graphPreview?.geometry ?? null}
               routeStale={search.stale}
               recommendations={tripChanged ? [] : (data?.recommendations ?? [])}
               selectedId={selectedId}
@@ -197,6 +250,11 @@ export default function App() {
             </Button>
           </header>
 
+          <div className="flex items-center justify-between gap-2 text-sm">
+            {accountLoading ? <span>Checking sign-in…</span> : account ? <><span>Signed in as {account.displayName || account.email}</span><Button type="button" variant="outline" size="sm" onClick={() => void logout()}>Sign out</Button></> : <><span>Sign in to search Google restaurants</span><Button asChild variant="outline" size="sm"><a href={googleSignInUrl}>Sign in with Google</a></Button></>}
+          </div>
+          {accountError && <p role="status" className="text-sm text-muted-foreground">{accountError}</p>}
+
           {(formOpen || !data) && (
             <SearchForm
               source={source}
@@ -204,7 +262,7 @@ export default function App() {
               onSourceChange={setSource}
               onDestinationChange={setDestination}
               prefs={prefs}
-              onPrefsChange={setPrefs}
+              onPrefsChange={(next) => { preferencesEdited.current = true; setPrefs(next); }}
               biasFor={biasFor}
               onSubmit={submit}
               onCancel={search.cancel}
@@ -214,6 +272,13 @@ export default function App() {
               serverFieldErrors={error?.fieldErrors ?? {}}
             />
           )}
+
+          {source.place && destination.place && !loading && <div className="rounded-lg border border-border p-3 text-xs">
+            <Button type="button" variant="outline" size="sm" onClick={() => void showGraphRoute()} disabled={graphLoading}>{graphLoading ? "Calculating WayDine route…" : selected && !tripChanged ? "Show WayDine route via this stop" : "Show WayDine graph route"}</Button>
+            <p className="mt-2 text-muted-foreground">Blue line: WayDine graph preview. Recommendations and times still use Google routing.</p>
+            {graphError && <p role="status" className="mt-2">{graphError}</p>}
+            {graphPreview && <><p className="mt-2">WayDine estimate: {(graphPreview.distanceM / 1000).toFixed(1)} km · {Math.round(graphPreview.durationSec / 60)} min. {graphPreview.attribution}</p>{graphPreview.warnings.map((warning) => <p key={warning} className="mt-1 text-muted-foreground">{warning}</p>)}</>}
+          </div>}
 
           {loading && (
             <div role="status" className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-sm">

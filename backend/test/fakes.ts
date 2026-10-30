@@ -29,6 +29,8 @@ export interface FakePlace {
   accessPenaltySec?: number;
   unreachable?: boolean;
   snapDistanceM?: number;
+  toStopSteps?: unknown[];
+  fromStopSteps?: unknown[];
 }
 
 export interface FakeWorld {
@@ -36,6 +38,7 @@ export interface FakeWorld {
   /** URL substrings that should fail with HTTP 503. */
   failWhen?: (url: URL) => boolean;
   requests: URL[];
+  baselineSteps?: unknown[];
 }
 
 const json = (body: unknown, status = 200) =>
@@ -72,11 +75,13 @@ export function makeFakeFetch(world: FakeWorld): typeof fetch {
 
     if (url.pathname.startsWith("/directions/v5/")) {
       const coords = parseCoords(url.pathname.split("/").pop()!);
-      const legs: Array<{ duration: number; distance: number; summary: string }> = [];
+      const legs: Array<{ duration: number; distance: number; summary: string; steps?: unknown[] }> = [];
+      const stop = coords.length === 3 ? placeAt(world, coords[1]!) : undefined;
       for (let i = 0; i < coords.length - 1; i++) {
         const s = legSeconds(world, coords[i]!, coords[i + 1]!);
         if (s === null) return json({ code: "NoSegment", message: "Could not find a matching segment" }, 422);
-        legs.push({ duration: s, distance: haversineM(coords[i]!, coords[i + 1]!), summary: "Test Road" });
+        const steps = coords.length === 3 ? (i === 0 ? stop?.toStopSteps : stop?.fromStopSteps) : world.baselineSteps;
+        legs.push({ duration: s, distance: haversineM(coords[i]!, coords[i + 1]!), summary: "Test Road", ...(steps ? { steps } : {}) });
       }
       const geometry = coords.slice(1).flatMap((c, i) => line(coords[i]!, c).slice(i === 0 ? 0 : 1));
       const route = {
@@ -180,6 +185,10 @@ export function makeFakeFetch(world: FakeWorld): typeof fetch {
 }
 
 export const GENEROUS_LIMITS: Record<BudgetBucket, number> = {
+  google_places_nearby: 100_000,
+  google_places_details: 100_000,
+  google_routes: 100_000,
+  google_route_matrix_elements: 100_000,
   geoapify_credits: 100_000,
   mapbox_geocode: 100_000,
   mapbox_searchbox: 100_000,

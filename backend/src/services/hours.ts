@@ -6,7 +6,7 @@
  * reported as unknown, never guessed.
  */
 import OpeningHours from "opening_hours";
-import type { Provider } from "../contract/api.js";
+import type { RestaurantProvider as Provider } from "../contract/api.js";
 import type { HoursSource, MapboxPeriod } from "../domain/venue.js";
 import { minuteOfWeek, wallClockAsLocalDate } from "../lib/time.js";
 
@@ -83,6 +83,20 @@ export function describePeriods(periods: MapboxPeriod[]): string {
 }
 
 function evaluateSource(src: HoursSource, instant: Date): { state: "open" | "closed" | "unknown"; minutesToClose: number | null; text: string } {
+  if (src.kind === "google") {
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone: src.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(instant);
+    const inCurrent = src.currentFrom !== null && src.currentThrough !== null && date >= src.currentFrom && date <= src.currentThrough;
+    const periods = inCurrent ? src.current : src.regular;
+    const intervals = periods ? periodsToIntervals(periods) : null;
+    const text = src.text ?? (periods ? describePeriods(periods) : "");
+    if (!intervals) return { state: "unknown", minutesToClose: null, text };
+    const m = minuteOfWeek(instant, src.timeZone);
+    for (const [start, end] of intervals) {
+      if (end - start >= WEEK) return { state: "open", minutesToClose: null, text };
+      for (const candidate of [m, m + WEEK]) if (candidate >= start && candidate < end) return { state: "open", minutesToClose: end - candidate, text };
+    }
+    return { state: "closed", minutesToClose: null, text };
+  }
   if (src.kind === "weekly-periods") {
     const intervals = periodsToIntervals(src.periods);
     const text = describePeriods(src.periods);

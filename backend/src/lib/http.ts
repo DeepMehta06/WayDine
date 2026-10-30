@@ -3,14 +3,14 @@
  * retries with backoff for transient failures, budget reservation per
  * attempt, and runtime validation of the response envelope.
  */
-import type { ZodType } from "zod";
+import type { ZodType, ZodTypeDef } from "zod";
 import { AppError } from "../errors.js";
 import { log, redactUrl } from "./log.js";
 import type { BudgetBucket, QuotaManager } from "./quota.js";
 
 export interface FetchJsonOptions<T> {
   url: string;
-  schema: ZodType<T>;
+  schema: ZodType<T, ZodTypeDef, any>;
   provider: string;
   quota: QuotaManager;
   budget: { bucket: BudgetBucket; units: number };
@@ -19,6 +19,11 @@ export interface FetchJsonOptions<T> {
   retries?: number;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  method?: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+  logResponseBody?: boolean;
+  additionalBudget?: { quota: QuotaManager; bucket: BudgetBucket; units: number };
   /** Maps a non-retryable HTTP status (with its body) to a domain error. */
   mapStatus?: (status: number, body: string) => AppError | undefined;
 }
@@ -46,7 +51,11 @@ export async function fetchJson<T>(opts: FetchJsonOptions<T>): Promise<T> {
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (signal?.aborted) throw new AppError("CANCELLED", "Request was cancelled.");
+    const additional = opts.additionalBudget;
+    // Check both ceilings before reserving either, without yielding between checks.
+    if (additional && !additional.quota.canAfford(additional.bucket, additional.units)) additional.quota.reserve(additional.bucket, additional.units);
     quota.reserve(budget.bucket, budget.units);
+    if (additional) additional.quota.reserve(additional.bucket, additional.units);
 
     const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
@@ -54,7 +63,7 @@ export async function fetchJson<T>(opts: FetchJsonOptions<T>): Promise<T> {
 
     let res: Response;
     try {
-      res = await fetchImpl(url, { signal: combined, headers: { Accept: "application/json" } });
+      res = await fetchImpl(url, { signal: combined, method: opts.method ?? "GET", headers: { Accept: "application/json", ...opts.headers }, ...(opts.body !== undefined ? { body: opts.body } : {}) });
     } catch (err) {
       if (signal?.aborted) throw new AppError("CANCELLED", "Request was cancelled.");
       const timedOut = timeout.aborted;
@@ -76,7 +85,7 @@ export async function fetchJson<T>(opts: FetchJsonOptions<T>): Promise<T> {
         status: res.status,
         attempt,
         ms: Date.now() - started,
-        body: bodySnippet,
+        ...(opts.logResponseBody === false ? {} : { body: bodySnippet }),
       });
       if (RETRYABLE_STATUS.has(res.status) && attempt < retries) {
         lastError = new AppError("UPSTREAM_UNAVAILABLE", "A map data service is temporarily unavailable.", {

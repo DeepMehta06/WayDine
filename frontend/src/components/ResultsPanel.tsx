@@ -62,6 +62,7 @@ export function ResultsPanel({ data, prefs, selectedId, onSelect, onAdjust, onEd
             {recs.map((rec) => (
               <li key={rec.id}>
                 <RecommendationCard recommendation={rec} selected={selectedId === rec.id} diet={prefs.diet} onSelect={onSelect} />
+                {rec.google?.attributions.map((a, i) => <p key={`${a.provider}-${i}`} className="px-2 text-xs text-muted-foreground">{a.providerUri ? <a href={a.providerUri} target="_blank" rel="noreferrer noopener" className="underline">{a.provider}</a> : a.provider}</p>)}
               </li>
             ))}
           </ol>

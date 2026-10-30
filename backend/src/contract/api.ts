@@ -6,6 +6,8 @@
 export type LngLat = [number, number];
 
 export type Provider = "geoapify" | "mapbox";
+/** Backend opt-in integrations; legacy browser contracts keep their existing default. */
+export type RestaurantProvider = Provider | "google";
 
 export type PlaceKind =
   | "neighbourhood"
@@ -62,6 +64,24 @@ export type CuisineId = (typeof CUISINE_OPTIONS)[number];
 
 export type DietPreference = "any" | "vegetarian-options" | "pure-veg";
 
+/** Account defaults; trip-specific choices remain separate from saved preferences. */
+export interface UserPreferences {
+  diet: DietPreference;
+  cuisines: CuisineId[];
+  includeUnconfirmedDiet: boolean;
+  maxDetourMinutes: number;
+  /** Maximum food spend per person in whole INR; null means no saved limit. */
+  budgetPerPersonInr: number | null;
+}
+
+export interface UserPreferencesResponse {
+  preferences: UserPreferences;
+  saved: boolean;
+  updatedAt: string | null;
+}
+
+export type UserPreferencesPatch = Partial<UserPreferences>;
+
 export interface RecommendRequest {
   source: LngLat;
   destination: LngLat;
@@ -77,7 +97,27 @@ export interface RecommendRequest {
   routeIndex?: number;
 }
 
+/** Authenticated Google searches use account defaults with optional per-trip overrides. */
+export type GoogleRecommendRequest = Omit<RecommendRequest, "preferences"> & {
+  preferences?: Partial<UserPreferences>;
+};
+
+export interface RecommendationPreferenceContext {
+  preferences: UserPreferences;
+  source: "saved" | "defaults";
+  overriddenFields: Array<keyof UserPreferences>;
+  /** True when a per-person budget was applied, even if some prices are unknown. */
+  budgetApplied: boolean;
+}
+
 export type MealPeriod = "breakfast" | "lunch" | "snacks" | "dinner" | "late night";
+
+export interface MealRecommendation {
+  service: "listed" | "not-listed" | "unknown";
+  /** General ideas based on the time and listed cuisine, not a verified menu. */
+  ideas: string[];
+  disclaimer: string;
+}
 
 export type VegetarianEvidence = "pure-veg" | "options" | "none" | "unknown";
 
@@ -99,7 +139,25 @@ export interface RouteSummary {
   alternatives: RouteOption[];
 }
 
-export interface Recommendation {
+/** Route evidence is indicative; geometric side is not proof of highway access. */
+export interface RouteAssessment {
+  sideOfSelectedRoute: "left" | "right" | "on-route" | "unknown";
+  localBearingDegrees: number | null;
+  uTurns: {
+    status: "reported" | "none-reported" | "unknown";
+    /** Null if maneuver data is incomplete. Includes the whole via route. */
+    count: number | null;
+    additionalToBaseline: "possible" | "none-detected" | "unknown";
+  };
+  backwardTravelNearStop: {
+    status: "possible" | "not-detected" | "unknown";
+    /** Approximate backwards progress along the selected route, not road distance. */
+    estimatedMetres: number | null;
+  };
+  routeDivergence: { status: "possible" | "not-detected" | "unknown"; nearBaselineFraction: number | null };
+}
+
+export interface Recommendation<P extends RestaurantProvider = RestaurantProvider> {
   id: string;
   rank: number;
   name: string;
@@ -112,7 +170,7 @@ export interface Recommendation {
   phone: string | null;
   website: string | null;
   /** `url` is a public listing (e.g. the OpenStreetMap object) when one exists. */
-  sources: Array<{ provider: Provider; id: string; url?: string }>;
+  sources: Array<{ provider: P; id: string; url?: string }>;
   arrivalTime: string;
   extraTimeSec: number;
   extraDistanceM: number;
@@ -129,19 +187,51 @@ export interface Recommendation {
   openingHours: {
     atArrival: "open" | "closed" | "unknown";
     closesWithinMinutes: number | null;
-    source: Provider | null;
+    source: P | null;
     text: string | null;
   };
-  diet: { vegetarian: VegetarianEvidence; source: Provider | null };
+  diet: { vegetarian: VegetarianEvidence; source: P | null };
   mealPeriod: MealPeriod;
+  mealRecommendation?: MealRecommendation;
+  budgetAssessment?: { status: "not-set" | "likely-within" | "unconfirmed"; budgetPerPersonInr: number | null };
   viaRoute: { geometry: LngLat[]; durationSec: number; distanceM: number };
   facts: string[];
   uncertainties: string[];
+  /** Omitted by older API versions. Does not assert entrance or crossing safety. */
+  routeAssessment?: RouteAssessment;
+  /** Available on Google-backed restaurant recommendations. */
+  google?: GoogleRestaurantDetails;
+}
+
+export interface GoogleRestaurantDetails {
+  placeId: string;
+  googleMapsUri: string | null;
+  shortAddress: string | null;
+  businessStatus: string | null;
+  rating: number | null;
+  userRatingCount: number | null;
+  priceLevel: string | null;
+  priceRange: { start: { currencyCode: string; units: string; nanos: number } | null; end: { currencyCode: string; units: string; nanos: number } | null } | null;
+  servesVegetarianFood: boolean | null;
+  meals: { breakfast: boolean | null; lunch: boolean | null; dinner: boolean | null; brunch: boolean | null; coffee: boolean | null; dessert: boolean | null };
+  service: { dineIn: boolean | null; takeout: boolean | null };
+  amenities: {
+    restroom: boolean | null; goodForChildren: boolean | null; menuForChildren: boolean | null;
+    parking: Record<string, boolean> | null;
+    accessibility: Record<string, boolean> | null;
+    payment: Record<string, boolean> | null;
+  };
+  photos: Array<{ name: string; widthPx: number | null; heightPx: number | null; authorAttributions: Array<{ displayName: string; uri: string | null; photoUri: string | null }> }>;
+  reviews: Array<{ rating: number | null; text: string | null; publishTime: string | null; googleMapsUri: string | null; author: { displayName: string; uri: string | null; photoUri: string | null } | null }>;
+  attributions: Array<{ provider: string; providerUri: string | null }>;
+  detailsStatus: "not-requested" | "available" | "unavailable";
 }
 
 export type ExclusionStage =
   | "diet"
   | "cuisine"
+  | "meal"
+  | "budget"
   | "hours"
   | "detour"
   | "unreachable"
@@ -154,7 +244,7 @@ export interface ExcludedPlace {
   reason: string;
 }
 
-export interface RecommendDiagnostics {
+export interface RecommendDiagnostics<P extends RestaurantProvider = RestaurantProvider> {
   corridorHalfWidthM: number;
   /**
    * Search areas spanning the whole route. `truncated` areas returned the
@@ -162,28 +252,35 @@ export interface RecommendDiagnostics {
    * be missing; `failed` areas had a provider error.
    */
   searchAreas: { total: number; failed: number; truncated: number };
-  discovered: { geoapify: number; mapbox: number; merged: number; malformedDropped: number };
+  discovered: { geoapify: number; mapbox: number; google?: number; merged: number; malformedDropped: number };
   inCorridor: number;
   screened: number;
   verified: number;
   notEvaluated: number;
   excludedByStage: Partial<Record<ExclusionStage, number>>;
-  providers: Partial<Record<Provider, ProviderStatus>>;
+  providers: Partial<Record<P, ProviderStatus>>;
   stageMs: Record<string, number>;
   warnings: string[];
 }
 
-export interface RecommendResponse {
+export interface RecommendResponse<P extends RestaurantProvider = RestaurantProvider> {
   requestId: string;
   timeZone: "Asia/Kolkata";
   route: RouteSummary;
-  recommendations: Recommendation[];
+  recommendations: Recommendation<P>[];
   excluded: ExcludedPlace[];
-  diagnostics: RecommendDiagnostics;
+  diagnostics: RecommendDiagnostics<P>;
   attribution: string[];
 }
 
+export type GoogleRecommendResponse = RecommendResponse<RestaurantProvider> & {
+  preferenceContext: RecommendationPreferenceContext;
+};
+
 export type ApiErrorCode =
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "AUTH_FAILED"
   | "BAD_REQUEST"
   | "OUT_OF_COVERAGE"
   | "NO_ROUTE"
@@ -194,6 +291,21 @@ export type ApiErrorCode =
   | "NOT_CONFIGURED"
   | "CANCELLED"
   | "INTERNAL";
+
+/** Public account data only. Provider tokens and session identifiers never appear here. */
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  provider: "google";
+  createdAt: string;
+  lastSignInAt: string | null;
+}
+
+export interface AuthMeResponse {
+  user: AuthUser;
+}
 
 export interface ApiErrorBody {
   error: {

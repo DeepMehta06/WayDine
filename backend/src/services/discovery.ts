@@ -3,7 +3,7 @@
  * cover the whole corridor; saturated areas are refined within a budget;
  * individual failures degrade to partial results instead of failing the trip.
  */
-import type { LngLat, Provider, ProviderStatus } from "../contract/api.js";
+import type { LngLat, RestaurantProvider as Provider, ProviderStatus } from "../contract/api.js";
 import type { MergedVenue, Venue } from "../domain/venue.js";
 import { AppError } from "../errors.js";
 import {
@@ -50,7 +50,7 @@ export interface DiscoveryResult {
     searchPoints: number;
     failedSearchPoints: number;
     saturatedAfterRefinement: number;
-    discovered: { geoapify: number; mapbox: number; merged: number; malformedDropped: number };
+    discovered: { geoapify: number; mapbox: number; google?: number; merged: number; malformedDropped: number };
     providers: Partial<Record<Provider, ProviderStatus>>;
     warnings: string[];
   };
@@ -144,7 +144,7 @@ export async function discoverVenues(
   for (const r of all) {
     if (r.ok) {
       okByProvider[r.provider] = (okByProvider[r.provider] ?? 0) + 1;
-      discovered[r.provider] += r.venues.length;
+      if (r.provider === "mapbox" || r.provider === "geoapify") discovered[r.provider] += r.venues.length;
       discovered.malformedDropped += r.malformed;
       rawVenues.push(...r.venues);
     } else {

@@ -6,11 +6,13 @@
 import { z } from "zod";
 import type {
   ApiErrorCode,
+  AuthMeResponse,
   LngLat,
   PlaceSuggestion,
   Recommendation,
   RecommendRequest,
   RecommendResponse,
+  UserPreferencesResponse,
   ReverseResponse,
   SuggestResponse,
 } from "@contract";
@@ -40,6 +42,7 @@ export function isAbort(err: unknown): boolean {
 
 const lngLat = z.tuple([z.number(), z.number()]) satisfies z.ZodType<LngLat>;
 const provider = z.enum(["geoapify", "mapbox"]);
+const restaurantProvider = z.enum(["geoapify", "mapbox", "google"]);
 const providerStatus = z.enum(["ok", "error", "disabled", "skipped", "quota"]);
 
 const placeSchema = z.object({
@@ -70,7 +73,7 @@ const recommendationSchema = z.object({
   address: z.string().nullable(),
   phone: z.string().nullable(),
   website: z.string().nullable(),
-  sources: z.array(z.object({ provider, id: z.string(), url: z.string().optional() })),
+  sources: z.array(z.object({ provider: restaurantProvider, id: z.string(), url: z.string().optional() })),
   arrivalTime: z.string(),
   extraTimeSec: z.number(),
   extraDistanceM: z.number(),
@@ -85,17 +88,32 @@ const recommendationSchema = z.object({
   openingHours: z.object({
     atArrival: z.enum(["open", "closed", "unknown"]),
     closesWithinMinutes: z.number().nullable(),
-    source: provider.nullable(),
+    source: restaurantProvider.nullable(),
     text: z.string().nullable(),
   }),
-  diet: z.object({ vegetarian: z.enum(["pure-veg", "options", "none", "unknown"]), source: provider.nullable() }),
+  diet: z.object({ vegetarian: z.enum(["pure-veg", "options", "none", "unknown"]), source: restaurantProvider.nullable() }),
   mealPeriod: z.enum(["breakfast", "lunch", "snacks", "dinner", "late night"]),
+  mealRecommendation: z.object({ service: z.enum(["listed", "not-listed", "unknown"]), ideas: z.array(z.string()), disclaimer: z.string() }).optional(),
+  budgetAssessment: z.object({ status: z.enum(["not-set", "likely-within", "unconfirmed"]), budgetPerPersonInr: z.number().nullable() }).optional(),
   viaRoute: z.object({ geometry: z.array(lngLat), durationSec: z.number(), distanceM: z.number() }),
   facts: z.array(z.string()),
   uncertainties: z.array(z.string()),
+  google: z.object({
+    placeId: z.string(), googleMapsUri: z.string().nullable(), shortAddress: z.string().nullable(), businessStatus: z.string().nullable(),
+    rating: z.number().nullable(), userRatingCount: z.number().nullable(), priceLevel: z.string().nullable(),
+    priceRange: z.object({ start: z.object({ currencyCode: z.string(), units: z.string(), nanos: z.number() }).nullable(), end: z.object({ currencyCode: z.string(), units: z.string(), nanos: z.number() }).nullable() }).nullable(),
+    servesVegetarianFood: z.boolean().nullable(),
+    meals: z.object({ breakfast: z.boolean().nullable(), lunch: z.boolean().nullable(), dinner: z.boolean().nullable(), brunch: z.boolean().nullable(), coffee: z.boolean().nullable(), dessert: z.boolean().nullable() }),
+    service: z.object({ dineIn: z.boolean().nullable(), takeout: z.boolean().nullable() }),
+    amenities: z.object({ restroom: z.boolean().nullable(), goodForChildren: z.boolean().nullable(), menuForChildren: z.boolean().nullable(), parking: z.record(z.boolean()).nullable(), accessibility: z.record(z.boolean()).nullable(), payment: z.record(z.boolean()).nullable() }),
+    photos: z.array(z.object({ name: z.string(), widthPx: z.number().nullable(), heightPx: z.number().nullable(), authorAttributions: z.array(z.object({ displayName: z.string(), uri: z.string().nullable(), photoUri: z.string().nullable() })) })),
+    reviews: z.array(z.object({ rating: z.number().nullable(), text: z.string().nullable(), publishTime: z.string().nullable(), googleMapsUri: z.string().nullable(), author: z.object({ displayName: z.string(), uri: z.string().nullable(), photoUri: z.string().nullable() }).nullable() })),
+    attributions: z.array(z.object({ provider: z.string(), providerUri: z.string().nullable() })),
+    detailsStatus: z.enum(["not-requested", "available", "unavailable"]),
+  }).optional(),
 }) satisfies z.ZodType<Recommendation>;
 
-const stage = z.enum(["diet", "cuisine", "hours", "detour", "unreachable", "verification"]);
+const stage = z.enum(["diet", "cuisine", "meal", "budget", "hours", "detour", "unreachable", "verification"]);
 
 const recommendSchema = z.object({
   requestId: z.string(),
@@ -115,13 +133,13 @@ const recommendSchema = z.object({
   diagnostics: z.object({
     corridorHalfWidthM: z.number(),
     searchAreas: z.object({ total: z.number(), failed: z.number(), truncated: z.number() }),
-    discovered: z.object({ geoapify: z.number(), mapbox: z.number(), merged: z.number(), malformedDropped: z.number() }),
+    discovered: z.object({ geoapify: z.number(), mapbox: z.number(), google: z.number().optional(), merged: z.number(), malformedDropped: z.number() }),
     inCorridor: z.number(),
     screened: z.number(),
     verified: z.number(),
     notEvaluated: z.number(),
     excludedByStage: z.record(stage, z.number()),
-    providers: z.object({ geoapify: providerStatus.optional(), mapbox: providerStatus.optional() }),
+    providers: z.object({ geoapify: providerStatus.optional(), mapbox: providerStatus.optional(), google: providerStatus.optional() }),
     stageMs: z.record(z.string(), z.number()),
     warnings: z.array(z.string()),
   }),
@@ -140,7 +158,7 @@ const errorSchema = z.object({
 async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...init, headers: { Accept: "application/json", ...init.headers } });
+    res = await fetch(`${API_BASE}${path}`, { credentials: "include", ...init, headers: { Accept: "application/json", ...init.headers } });
   } catch (err) {
     if (isAbort(err)) throw err;
     throw new ApiError("NETWORK", "Couldn't reach WayDine. Check your connection and try again.");
@@ -177,10 +195,28 @@ export function reversePlace(point: LngLat, signal?: AbortSignal): Promise<Rever
 }
 
 export function fetchRecommendations(body: RecommendRequest, signal: AbortSignal): Promise<RecommendResponse> {
-  return request("/api/recommend", recommendSchema, {
+  return request("/api/google/recommend", recommendSchema, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
+}
+
+const graphRouteSchema = z.object({ geometry: z.array(lngLat).min(2), distanceM: z.number().nonnegative(), durationSec: z.number().nonnegative(), snapDistancesM: z.array(z.number().nonnegative()), warnings: z.array(z.string()), attribution: z.string() });
+export type GraphPreview = z.infer<typeof graphRouteSchema>;
+export function fetchGraphPreview(body: { source: LngLat; destination: LngLat; stop?: LngLat }, signal: AbortSignal): Promise<GraphPreview> {
+  return request("/api/graph/route", graphRouteSchema, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+}
+
+const authSchema = z.object({ user: z.object({ id: z.string(), email: z.string(), displayName: z.string().nullable(), avatarUrl: z.string().nullable(), provider: z.literal("google"), createdAt: z.string(), lastSignInAt: z.string().nullable() }) }) satisfies z.ZodType<AuthMeResponse>;
+const preferenceSchema = z.object({ preferences: z.object({ diet: z.enum(["any", "vegetarian-options", "pure-veg"]), cuisines: z.array(z.enum(["north indian", "south indian", "maharashtrian", "gujarati", "chinese", "pizza", "burger", "biryani", "seafood", "cafe", "bakery", "dessert", "street food"])), includeUnconfirmedDiet: z.boolean(), maxDetourMinutes: z.number(), budgetPerPersonInr: z.number().nullable() }), saved: z.boolean(), updatedAt: z.string().nullable() }) satisfies z.ZodType<UserPreferencesResponse>;
+export const getAccount = () => request("/api/auth/me", authSchema);
+export const getPreferences = () => request("/api/me/preferences", preferenceSchema);
+export const googleSignInUrl = `${API_BASE}/api/auth/google`;
+export async function signOut(): Promise<void> {
+  let response: Response;
+  try { response = await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }); }
+  catch { throw new ApiError("NETWORK", "Couldn't reach WayDine. Check your connection and try again."); }
+  if (!response.ok) throw new ApiError("INTERNAL", "Couldn't sign out. Please try again.");
 }

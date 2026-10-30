@@ -17,6 +17,7 @@ const server = createApp(config, ctx, searchLog).listen(config.PORT, () => {
 function shutdown(signal: string) {
   log("info", "server.shutdown", { signal });
   ctx.quota.persistNow();
+  ctx.googleMonthlyQuota?.persistNow();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000).unref();
 }

@@ -59,6 +59,7 @@ export function RecommendationCard({ recommendation: r, selected, diet, onSelect
           <p className="mt-0.5 truncate text-xs text-muted-foreground capitalize">
             {descriptor || "Food place"} · arrive {formatWhen(r.arrivalTime)}
           </p>
+          {r.sources.some((source) => source.provider === "google") && <p translate="no" className="mt-1 whitespace-nowrap font-sans text-xs font-normal text-[#5e5e5e]">Google Maps</p>}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {hours.atArrival === "open" ? (
               <Pill tone={hours.closesWithinMinutes !== null ? "warn" : "good"}>

@@ -76,6 +76,7 @@ function fromVenue(v: Venue): MergedVenue {
     hours: v.hours ? [v.hours] : [],
     vegetarian: v.vegetarian,
     vegetarianSource: v.vegetarian === "unknown" ? null : v.provider,
+    ...(v.google ? { google: v.google } : {}),
   };
 }
 
@@ -90,6 +91,7 @@ function absorb(target: MergedVenue, v: Venue): void {
   target.address ??= v.address;
   target.phone ??= v.phone;
   target.website ??= v.website;
+  if (v.google && (!target.google || v.google.detailsStatus === "available")) target.google = v.google;
   target.venueType ??= v.venueType;
   target.cuisineTags = [...new Set([...target.cuisineTags, ...v.cuisineTags])];
   if (v.hours) target.hours.push(v.hours);
@@ -106,7 +108,7 @@ function absorb(target: MergedVenue, v: Venue): void {
 export function mergeVenues(venues: Venue[]): MergedVenue[] {
   const merged: MergedVenue[] = [];
   for (const v of venues) {
-    const match = merged.find((m) => isSamePlace(m, v));
+    const match = merged.find((m) => m.sources.some((source) => source.provider === v.provider && source.id === v.providerId) || isSamePlace(m, v));
     if (match) absorb(match, v);
     else merged.push(fromVenue(v));
   }

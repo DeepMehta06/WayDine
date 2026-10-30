@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
-import { CUISINE_OPTIONS, type RecommendRequest } from "../contract/api.js";
+import { CUISINE_OPTIONS, type GoogleRecommendRequest, type RecommendRequest, type RecommendationPreferenceContext } from "../contract/api.js";
 import type { SearchLogger } from "../db/searchLog.js";
+import { defaultUserPreferences, userPreferencesSchema } from "../domain/preferences.js";
 import { AppError } from "../errors.js";
 import { SharedRun } from "../lib/cache.js";
 import { asyncHandler, clientKey } from "../lib/express.js";
@@ -9,6 +10,7 @@ import { haversineM, inIndia, type LngLat } from "../lib/geo.js";
 import type { ClientRateLimiter } from "../lib/quota.js";
 import type { ProviderContext } from "../providers/context.js";
 import { recommend } from "../services/recommend.js";
+import type { PreferencesService } from "../services/preferences.js";
 
 const lngLat = z.tuple([z.number().finite().min(-180).max(180), z.number().finite().min(-90).max(90)]);
 
@@ -31,6 +33,11 @@ export const requestSchema = z.object({
   }),
   routeIndex: z.number().int().min(0).max(2).optional(),
 }) satisfies z.ZodType<RecommendRequest>;
+
+/** The legacy route retains its required full preference object. */
+export const googleRequestSchema = requestSchema.omit({ preferences: true }).extend({
+  preferences: userPreferencesSchema.partial().optional(),
+}).strict() satisfies z.ZodType<GoogleRecommendRequest>;
 
 export function validateRecommendRequest(body: unknown, now: Date): { input: z.infer<typeof requestSchema>; departure: Date } {
   const parsed = requestSchema.safeParse(body);
@@ -69,20 +76,49 @@ export function validateRecommendRequest(body: unknown, now: Date): { input: z.i
   return { input, departure };
 }
 
-export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter, searchLog: SearchLogger): Router {
+export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter, searchLog: SearchLogger, savedPreferences?: PreferencesService | null): Router {
   const router = Router();
   const shared = new SharedRun<Awaited<ReturnType<typeof recommend>>>();
 
   router.post(
     "/",
     asyncHandler(async (req, res) => {
-      const { input, departure } = validateRecommendRequest(req.body, new Date());
+      const now = new Date();
+      let preferenceContext: RecommendationPreferenceContext | undefined;
+      let parsedGoogle: z.infer<typeof googleRequestSchema> | undefined;
+      let validated: ReturnType<typeof validateRecommendRequest>;
+      if (ctx.restaurantSource === "google") {
+        const parsed = googleRequestSchema.safeParse(req.body);
+        if (!parsed.success) throw new AppError("BAD_REQUEST", "Some trip details are missing or invalid.", { details: parsed.error.flatten() });
+        parsedGoogle = parsed.data;
+        // Validate route and overrides before reading saved data or calling map providers.
+        validated = validateRecommendRequest({ ...parsedGoogle, preferences: { ...defaultUserPreferences(), ...parsedGoogle.preferences } }, now);
+      } else {
+        validated = validateRecommendRequest(req.body, now);
+      }
       limiter.check(`recommend:${clientKey(req)}`);
-      if (!ctx.mapboxToken) throw new AppError("NOT_CONFIGURED", "Routing is not configured on this server.");
+      if (ctx.routingProvider === "google" ? !ctx.googleRoutesKey : !ctx.mapboxToken) throw new AppError("NOT_CONFIGURED", "Routing is not configured on this server.");
+
+      if (parsedGoogle) {
+        if (!req.user) throw new AppError("UNAUTHENTICATED", "Sign in with Google to continue.");
+        if (!savedPreferences) throw new AppError("NOT_CONFIGURED", "Saved preferences are not configured on this server.");
+        const stored = await savedPreferences.get(req.user.id);
+        const overrides = parsedGoogle.preferences ?? {};
+        const effective = { ...stored.preferences, ...overrides };
+        validated = validateRecommendRequest({ ...parsedGoogle, preferences: effective }, now);
+        preferenceContext = {
+          preferences: effective,
+          source: stored.saved ? "saved" : "defaults",
+          overriddenFields: Object.keys(overrides) as RecommendationPreferenceContext["overriddenFields"],
+          budgetApplied: effective.budgetPerPersonInr !== null,
+        };
+      }
+      const { input, departure } = validated;
 
       // Identical concurrent searches share one pipeline run (no provider data is retained afterwards).
       const departureKey = input.departure.mode === "now" ? Math.floor(departure.getTime() / 60_000) : input.departure.time;
-      const key = JSON.stringify({ ...input, departure: departureKey });
+      const effectivePreferences = { ...input.preferences, ...(preferenceContext ? { budgetPerPersonInr: preferenceContext.preferences.budgetPerPersonInr } : {}) };
+      const key = JSON.stringify({ ...input, preferences: effectivePreferences, departure: departureKey });
       const started = Date.now();
       const result = await shared.run(key, req.abortSignal, (signal) =>
         recommend(
@@ -91,7 +127,7 @@ export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter
             source: input.source as LngLat,
             destination: input.destination as LngLat,
             departure,
-            preferences: input.preferences,
+            preferences: effectivePreferences,
             routeIndex: input.routeIndex,
           },
           req.id,
@@ -109,7 +145,8 @@ export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter
         durationMs: Date.now() - started,
       });
       res.setHeader("Cache-Control", "no-store");
-      res.json({ ...result, requestId: req.id });
+      // Only searches with identical effective preferences share work.
+      res.json({ ...result, requestId: req.id, ...(preferenceContext ? { preferenceContext } : {}) });
     })
   );
   return router;

@@ -249,7 +249,7 @@ const directionsSchema = z.object({
       duration: finite,
       distance: finite,
       geometry: z.object({ coordinates: z.array(lngLat).min(2) }),
-      legs: z.array(z.object({ duration: finite, distance: finite, summary: z.string().optional() })),
+      legs: z.array(z.object({ duration: finite.nonnegative(), distance: finite.nonnegative(), summary: z.string().optional(), steps: z.array(z.unknown()).optional() })),
     })
   ),
   waypoints: z.array(z.object({ distance: finite.optional(), name: z.string().optional(), location: lngLat })),
@@ -267,14 +267,14 @@ function routingStatusError(status: number, body: string): AppError | undefined 
 export async function mapboxDirections(
   ctx: ProviderContext,
   coordinates: LngLat[],
-  opts: { approaches?: Array<"unrestricted" | "curb">; alternatives?: boolean; signal?: AbortSignal }
+  opts: { approaches?: Array<"unrestricted" | "curb">; alternatives?: boolean; steps?: boolean; signal?: AbortSignal }
 ): Promise<DirectionsResult> {
   const token = requireToken(ctx);
   const coords = coordinates.map(([lng, lat]) => `${lng.toFixed(6)},${lat.toFixed(6)}`).join(";");
   const url = new URL(`${API}/directions/v5/mapbox/driving/${coords}`);
   url.searchParams.set("geometries", "geojson");
   url.searchParams.set("overview", "full");
-  url.searchParams.set("steps", "false");
+  url.searchParams.set("steps", String(Boolean(opts.steps)));
   url.searchParams.set("alternatives", String(Boolean(opts.alternatives)));
   if (opts.approaches) url.searchParams.set("approaches", opts.approaches.join(";"));
   url.searchParams.set("access_token", token);

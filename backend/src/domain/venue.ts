@@ -2,7 +2,7 @@
  * Normalized place-details model. Every field is nullable/empty when the
  * source does not supply it; nothing is inferred from a venue's name.
  */
-import type { LngLat, Provider, VegetarianEvidence } from "../contract/api.js";
+import type { LngLat, RestaurantProvider as Provider, VegetarianEvidence, GoogleRestaurantDetails } from "../contract/api.js";
 
 export interface MapboxPeriod {
   open: { day: number; time: string };
@@ -11,7 +11,8 @@ export interface MapboxPeriod {
 
 export type HoursSource =
   | { kind: "weekly-periods"; provider: Provider; periods: MapboxPeriod[] }
-  | { kind: "osm"; provider: Provider; text: string };
+  | { kind: "osm"; provider: Provider; text: string }
+  | { kind: "google"; provider: "google"; regular: MapboxPeriod[] | null; current: MapboxPeriod[] | null; currentFrom: string | null; currentThrough: string | null; text: string | null; timeZone: string };
 
 export interface Venue {
   provider: Provider;
@@ -29,6 +30,7 @@ export interface Venue {
   cuisineTags: string[];
   hours: HoursSource | null;
   vegetarian: VegetarianEvidence;
+  google?: GoogleRestaurantDetails;
 }
 
 /** A venue after cross-provider merging; keeps every contributing source. */

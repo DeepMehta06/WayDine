@@ -25,7 +25,7 @@ export function NoResultsState({ data, prefs, onAdjust, onEdit }: NoResultsState
       </h3>
       <p className="text-sm text-muted-foreground">
         {nothingNearby
-          ? `Our data sources list no restaurants within ${formatDistance(d.corridorHalfWidthM)} of the route. Places may exist that aren't listed. Allowing more extra driving searches a wider strip.`
+          ? `No restaurants were found within ${formatDistance(d.corridorHalfWidthM)} of the route. Places may exist that weren't found.`
           : `We found ${d.inCorridor} place${d.inCorridor === 1 ? "" : "s"} near the route, but none passed every check.`}
       </p>
       {topReasons.length > 0 && (
