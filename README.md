@@ -1,7 +1,7 @@
 # WayDine
 
 <p align="center">
-  <img src="docs/assets/waydine-icon.png" width="112" alt="WayDine road and dining pin icon" />
+  <img src="docs/assets/waydine-icon.png" width="100%" alt="Waypoint — complete logo artwork" />
 </p>
 
 **Eat on the way, not out of the way.** Route-aware restaurant discovery with explained detours, arrival-time checks, dietary preferences and saved trip plans.

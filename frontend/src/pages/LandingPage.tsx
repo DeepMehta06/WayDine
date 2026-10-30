@@ -4,11 +4,12 @@ import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useGSAP } from "@gsap/react";
 import Lenis from "lenis";
-import { ArrowRight, CircleHelp, Clock, Leaf, Navigation, Route, Star, TriangleAlert } from "lucide-react";
+import { ArrowRight, CircleHelp, Clock, Navigation, Route, Star } from "lucide-react";
 import { takeReturnPath, useAuth } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import { ItineraryTicket, type ExampleTrip } from "@/components/landing/ItineraryTicket";
 import { RoadNetBackground } from "@/components/landing/RoadNetBackground";
+import { StopEvidenceCards } from "@/components/landing/StopEvidenceCards";
 import { Logo } from "@/components/shell/Logo";
 import { useReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -112,6 +113,9 @@ export default function LandingPage() {
             <a href="#how" className="hidden rounded-md px-3 py-2 text-muted-foreground hover:text-foreground sm:block">
               How it works
             </a>
+            <Link to="/docs" className="rounded-md px-3 py-2 text-muted-foreground hover:text-foreground">
+              Docs
+            </Link>
             {signedIn ? (
               <Button asChild variant="outline" size="lg">
                 <Link to="/plan">Open planner</Link>
@@ -210,20 +214,7 @@ export default function LandingPage() {
               hand-off to navigation that goes via the stop.
             </p>
           </div>
-          <ul data-reveal className="grid gap-3 sm:grid-cols-2 lg:col-span-7">
-            {[
-              { icon: Navigation, title: "+4 min", body: "Extra driving, routed to the entrance and back." },
-              { icon: Clock, title: "Open at 12:14", body: "Checked against your arrival time, not now." },
-              { icon: Leaf, title: "Pure veg", body: "Only from listing data, never guessed from a name." },
-              { icon: TriangleAlert, title: "U-turn likely", body: "Flagged when the route doubles back near the stop." },
-            ].map(({ icon: Icon, title, body }) => (
-              <li key={title} className="rounded-xl border border-border bg-card p-5">
-                <Icon aria-hidden className="size-5 text-accent" />
-                <p className="mt-3 font-display text-2xl font-semibold tracking-wide tabular-nums">{title}</p>
-                <p className="mt-1 text-sm text-foreground/75">{body}</p>
-              </li>
-            ))}
-          </ul>
+          <StopEvidenceCards />
         </div>
       </section>
 
