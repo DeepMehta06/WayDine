@@ -142,12 +142,13 @@ export class ClientRateLimiter {
   private hits = new Map<string, number[]>();
 
   constructor(
-    private readonly perMinute: number,
+    private readonly perMinute: number | null,
     private readonly now: () => number = () => Date.now(),
     private readonly maxKeys = 10_000
   ) {}
 
   check(clientKey: string): void {
+    if (this.perMinute === null) return;
     const t = this.now();
     const windowStart = t - 60_000;
     const recent = (this.hits.get(clientKey) ?? []).filter((x) => x > windowStart);

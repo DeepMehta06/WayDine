@@ -86,7 +86,11 @@ Requesting details does not download photos. The returned photo resource names,
 dimensions and author attribution are metadata for a future photo integration.
 No photo endpoint has been added, so image requests cannot happen implicitly.
 
-The Google route is limited to two recommendations per client per minute; the
+The Google recommendation endpoint defaults to two requests per client per minute,
+configured by `GOOGLE_RECOMMEND_PER_MINUTE`. Set it to `null` (or `none`) to disable
+that limiter. `GOOGLE_ROUTES_PER_DAY` and `GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY`
+also accept `null` (or `none`) to disable the application's daily routing ceilings.
+Google's own quotas still apply. The
 detail endpoint is limited to four lookups per account/client per minute. These
 limits are in addition to the provider budgets. Concurrent identical details
 share in-flight work; results are not cached for subsequent requests.

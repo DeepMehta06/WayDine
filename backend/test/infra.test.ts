@@ -80,7 +80,8 @@ describe("#62 hard free-tier ceilings", () => {
     expect(loadConfig({}).GOOGLE_PLACES_NEARBY_PER_DAY).toBe(20);
     expect(loadConfig({ GOOGLE_PLACES_DETAILS_PER_DAY: "42" }).GOOGLE_PLACES_DETAILS_PER_DAY).toBe(42);
     const keys = ["GOOGLE_PLACES_NEARBY_PER_DAY", "GOOGLE_PLACES_DETAILS_PER_DAY",
-      "GOOGLE_PLACES_NEARBY_PER_MONTH", "GOOGLE_PLACES_DETAILS_PER_MONTH"] as const;
+      "GOOGLE_PLACES_NEARBY_PER_MONTH", "GOOGLE_PLACES_DETAILS_PER_MONTH",
+      "GOOGLE_ROUTES_PER_DAY", "GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY", "GOOGLE_RECOMMEND_PER_MINUTE"] as const;
     for (const key of keys) {
       for (const value of ["null", "none"]) expect(loadConfig({ [key]: value })[key]).toBeNull();
       expect(loadConfig({ [key]: "42" })[key]).toBe(42);

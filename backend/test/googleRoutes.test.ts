@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { googleDirections, googleMatrix } from "../src/providers/googleRoutes.js";
 import { makeContext } from "./fakes.js";
 import { screenByMatrix } from "../src/services/routing.js";
+import { QuotaManager } from "../src/lib/quota.js";
 
 const a: [number, number] = [72.8, 19.0];
 const b: [number, number] = [72.9, 19.1];
@@ -17,6 +18,19 @@ function context(body: unknown) {
 }
 
 describe("Google Routes adapter", () => {
+  it("continues routing past the old daily ceilings when those caps are null", async () => {
+    const directions = context({ routes: [{ duration: "60s", distanceMeters: 1000, polyline: { geoJsonLinestring: { coordinates: [a, b] } }, legs: [leg(b, "TURN_RIGHT")] }] });
+    const matrix = context([{ condition: "ROUTE_EXISTS", duration: "12s" }]);
+    const quota = new QuotaManager({ google_routes: null, google_route_matrix_elements: null }, null);
+    directions.ctx.quota = matrix.ctx.quota = quota;
+    quota.reserve("google_routes", 100);
+    quota.reserve("google_route_matrix_elements", 300);
+    await googleDirections(directions.ctx, [a, b], {});
+    expect(await googleMatrix(matrix.ctx, [a, b], [0], [1], {})).toEqual([[12]]);
+    expect(quota.snapshot().buckets.google_routes).toEqual({ used: 101, limit: null });
+    expect(quota.snapshot().buckets.google_route_matrix_elements).toEqual({ used: 301, limit: null });
+  });
+
   it("requests a stop on the preferred road side and preserves route evidence", async () => {
     const { ctx, request } = context({ routes: [{ duration: "120s", distanceMeters: 2000, polyline: { geoJsonLinestring: { coordinates: [a, b, c] } }, legs: [leg(b, "UTURN_LEFT"), leg(c, "TURN_RIGHT")] }] });
     const result = await googleDirections(ctx, [a, b, c], {});

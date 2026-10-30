@@ -44,6 +44,6 @@ export function googleRouter(config: AppConfig, ctx: ProviderContext, auth: Auth
     res.setHeader("Cache-Control", "private, max-age=600");
     res.redirect(302, uri);
   }));
-  router.use("/recommend", requireTrustedOrigin(config), recommendRouter({ ...ctx, restaurantSource: "google" }, new ClientRateLimiter(2), searchLog, preferences, trips));
+  router.use("/recommend", requireTrustedOrigin(config), recommendRouter({ ...ctx, restaurantSource: "google" }, new ClientRateLimiter(config.GOOGLE_RECOMMEND_PER_MINUTE), searchLog, preferences, trips));
   return router;
 }

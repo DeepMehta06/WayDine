@@ -143,7 +143,7 @@ The API defaults to localhost:4000 and Vite to localhost:5173. Vite proxies /api
 ## Configuration and provider boundaries
 
 - Google Maps display: VITE_GOOGLE_MAPS_API_KEY, restricted to browser referrers and Maps JavaScript. Map loads have separate billing; documentation itself contains no map.
-- Route computation: GOOGLE_ROUTES_API_KEY, GOOGLE_ROUTES_PER_DAY (100 default), GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY (300 default).
+- Route computation: GOOGLE_ROUTES_API_KEY, GOOGLE_ROUTES_PER_DAY (100 default), GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY (300 default). Both limits accept null or none to disable the application ceiling. GOOGLE_RECOMMEND_PER_MINUTE (2 default) controls the Google recommendation request rate and also accepts null or none.
 - Restaurant discovery: GOOGLE_PLACES_ENABLED=false by default and GOOGLE_PLACES_API_KEY. Enable explicitly after configuring auth. Default per-request limits are 3 searches and 3 details, with a 200 m corridor. Daily/monthly nearby limits are 20/100, details 20/100 and photos 30/200. These are application ceilings, not promises about provider pricing or free allowances.
 - Search: GEOAPIFY_API_KEY powers existing location search and legacy discovery. Mapbox adapters and budget configuration remain for legacy paths; they do not render the current Google map.
 - Account storage: SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and server-only SUPABASE_SERVICE_ROLE_KEY. AUTH_ENABLED=true also requires AUTH_ENCRYPTION_KEY, a base64 32-byte key. Configure AUTH_CALLBACK_URL, AUTH_FRONTEND_URL, CORS_ORIGIN and AUTH_COOKIE_SECURE.

@@ -357,6 +357,22 @@ describe("Google recommendations with account preferences", () => {
   });
   afterEach(() => server.close());
 
+  it.each([
+    { limit: "null", statuses: [200, 200, 200] },
+    { limit: "2", statuses: [200, 200, 429] },
+  ])("honors GOOGLE_RECOMMEND_PER_MINUTE=$limit with mocked providers", async ({ limit, statuses }) => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createApp(loadConfig({ GOOGLE_RECOMMEND_PER_MINUTE: limit }), h.ctx, { enabled: false, record() {} }, auth, new PreferencesService(store)).listen(0);
+    await new Promise((resolve) => server.once("listening", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    for (const status of statuses) {
+      const response = await post(body);
+      expect(response.status).toBe(status);
+      if (status === 429) expect((await response.json()).error.code).toBe("RATE_LIMITED");
+      else await response.json();
+    }
+  });
+
   it("uses the signed-in user's saved food and detour choices when overrides are omitted", async () => {
     const r = await post(body); const result = await r.json();
     expect(r.status).toBe(200);
