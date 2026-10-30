@@ -187,6 +187,7 @@ export function makeFakeFetch(world: FakeWorld): typeof fetch {
 export const GENEROUS_LIMITS: Record<BudgetBucket, number> = {
   google_places_nearby: 100_000,
   google_places_details: 100_000,
+  google_places_photos: 100_000,
   google_routes: 100_000,
   google_route_matrix_elements: 100_000,
   geoapify_credits: 100_000,

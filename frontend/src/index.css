@@ -127,3 +127,42 @@ button:not(:disabled), [role="button"]:not(:disabled) {
     @apply border-border outline-ring/50;
   }
 }
+
+/* Browser surfaces carry the palette too. */
+::selection {
+  background: color-mix(in oklch, var(--accent) 35%, transparent);
+  color: var(--foreground);
+}
+input, textarea {
+  caret-color: var(--primary);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--primary) 35%, transparent) transparent;
+}
+a {
+  text-underline-offset: 3px;
+}
+
+/* Itinerary ticket: perforated stub edge and dashed route spine. */
+.ticket {
+  --notch: 10px;
+  -webkit-mask: radial-gradient(circle var(--notch) at 0 var(--stub), transparent 98%, #000) 0 0 / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% var(--stub), transparent 98%, #000) 100% 0 / 51% 100% no-repeat;
+  mask: radial-gradient(circle var(--notch) at 0 var(--stub), transparent 98%, #000) 0 0 / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% var(--stub), transparent 98%, #000) 100% 0 / 51% 100% no-repeat;
+}
+.perforation {
+  background-image: linear-gradient(to right, var(--border) 50%, transparent 50%);
+  background-size: 10px 1.5px;
+  background-repeat: repeat-x;
+  background-position: center;
+}
+.route-spine {
+  background-image: linear-gradient(to bottom, var(--primary) 55%, transparent 55%);
+  background-size: 2px 9px;
+  background-repeat: repeat-y;
+}
+.font-display {
+  font-family: var(--font-display);
+}

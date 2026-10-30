@@ -160,17 +160,20 @@ export async function recommend(
   const inCorridor = discovery.venues.length;
   lap("discovery");
 
-  // Google search returns inexpensive identity fields. Enrich only a bounded,
-  // route-wide shortlist, before dietary/hours eligibility; never guess missing data.
-  let discoveryNotEvaluated = 0;
-  if (googleMode) {
-    const shortlist = selectForScreening(discovery.venues, baseline.distance, ctx.googlePlacesLimits?.details ?? 3);
-    discoveryNotEvaluated = discovery.venues.length - shortlist.length;
-    const details = await mapSettled(shortlist, 2, async (v) => {
+  // Google Nearby Search returns identity fields only; Place Details (hours, diet,
+  // price, rating) cost more and are capped per request. With Google routing, details
+  // are fetched AFTER route screening, for the stops with the least estimated extra
+  // time, so the cap never discards places before their access is known. The graph
+  // engine path still enriches a route-wide sample first.
+  const detailsCap = ctx.googlePlacesLimits?.details ?? 3;
+  const deferDetails = googleMode && !ctx.graph;
+
+  const enrichWithDetails = async (venues: CorridorVenue[]): Promise<CorridorVenue[]> => {
+    const details = await mapSettled(venues, 2, async (v) => {
       const id = v.sources.find((source) => source.provider === "google")!.id;
       return googleDetails(ctx, id, signal);
     });
-    discovery.venues = shortlist.flatMap((v, index) => {
+    return venues.flatMap((v, index) => {
       const detail = details[index]!;
       if (!detail.ok) {
         if (detail.error instanceof AppError && detail.error.code === "CANCELLED") throw detail.error;
@@ -186,25 +189,34 @@ export async function recommend(
       }
       return [{ ...v, ...fresh, id: v.id, sources: v.sources, hours: fresh.hours ? [fresh.hours] : [], vegetarianSource: fresh.vegetarian === "unknown" ? null : "google" as const, straightLineFromRouteM: Math.round(pos.distanceM), routePositionM: Math.round(pos.alongM) }];
     });
+  };
+
+  let discoveryNotEvaluated = 0;
+  if (googleMode && !deferDetails) {
+    const shortlist = selectForScreening(discovery.venues, baseline.distance, detailsCap);
+    discoveryNotEvaluated = discovery.venues.length - shortlist.length;
+    discovery.venues = await enrichWithDetails(shortlist);
     lap("details");
   }
 
-  // 3. Cheap eligibility checks before spending routing quota.
-  const eligible: Eligible[] = [];
-  for (const v of discovery.venues) {
-    const diet = dietDecision(v.vegetarian, preferences.diet, preferences.includeUnconfirmedDiet);
+  // 3. Cheap eligibility checks before spending routing quota. `cuisineOnly` is used
+  // before Place Details exist; the full check runs again once details are known.
+  const assessEligibility = (v: CorridorVenue, cuisineOnly: boolean): Eligible | null => {
+    const diet = cuisineOnly ? { eligible: true as const, unconfirmed: false } : dietDecision(v.vegetarian, preferences.diet, preferences.includeUnconfirmedDiet);
     if (!diet.eligible) {
-      exclude(v.id, v.name, "diet", diet.reason, 3);
-      continue;
+      const notFetched = v.google?.detailsStatus === "not-requested" && v.vegetarian === "unknown";
+      exclude(v.id, v.name, "diet", notFetched ? "Its dietary information wasn't loaded within this search's details limit, so vegetarian options can't be confirmed. Include unconfirmed places to see it." : diet.reason, 3);
+      return null;
     }
     const cuisine = cuisineDecision(v.cuisineTags, v.venueType, preferences.cuisines);
     if (!cuisine.eligible) {
       exclude(v.id, v.name, "cuisine", cuisine.reason, 3);
-      continue;
+      return null;
     }
+    if (cuisineOnly) return { venue: v, dietUnconfirmed: false, cuisineMatched: cuisine.matched };
     if (assessBudget(preferences.budgetPerPersonInr, v.google?.priceRange) === "above-range") {
       exclude(v.id, v.name, "budget", `Google's listed typical price range starts above your ₹${preferences.budgetPerPersonInr} per-person budget; individual menu prices may differ.`, 3);
-      continue;
+      return null;
     }
     // Pre-check hours only when the place is closed across a +/-20 min window
     // around the estimated pass time, so estimate error can't wrongly exclude it.
@@ -214,10 +226,16 @@ export async function recommend(
       const states = [-20, 0, 20].map((o) => evaluateHours(v.hours, at(o)).atArrival);
       if (states.every((s) => s === "closed")) {
         exclude(v.id, v.name, "hours", `Listed hours show it closed around when you'd pass (about ${arrivalLabel(at(0))}).`, 2);
-        continue;
+        return null;
       }
     }
-    eligible.push({ venue: v, dietUnconfirmed: diet.unconfirmed, cuisineMatched: cuisine.matched });
+    return { venue: v, dietUnconfirmed: diet.unconfirmed, cuisineMatched: cuisine.matched };
+  };
+
+  const eligible: Eligible[] = [];
+  for (const v of discovery.venues) {
+    const e = assessEligibility(v, deferDetails);
+    if (e) eligible.push(e);
   }
   lap("eligibility");
 
@@ -275,7 +293,7 @@ export async function recommend(
     }
     lap("graph-routing");
   } else {
-    const shortlist: Array<Eligible & { estimatedExtraSec: number }> = [];
+    let shortlist: Array<Eligible & { estimatedExtraSec: number }> = [];
     if (selected.length > 0) {
       const { screened } = await screenByMatrix(ctx, source, destination, selected.map((e) => routedTo(e.venue)), signal);
       for (const s of screened) {
@@ -296,6 +314,23 @@ export async function recommend(
       }
     }
     lap("screening");
+
+    if (deferDetails && shortlist.length > 0) {
+      // Spend the Place Details budget on the stops that are actually quickest to reach.
+      const byEstimate = [...shortlist].sort((a, b) => a.estimatedExtraSec - b.estimatedExtraSec);
+      const toDetail = byEstimate.slice(0, detailsCap).map((e) => e.venue);
+      const enriched = new Map((await enrichWithDetails(toDetail)).map((v) => [v.id, v]));
+      const detailedIds = new Set(toDetail.map((v) => v.id));
+      const next: typeof shortlist = [];
+      for (const s of byEstimate) {
+        if (detailedIds.has(s.venue.id) && !enriched.has(s.venue.id)) continue; // excluded by details (moved or closed)
+        const venue = enriched.get(s.venue.id) ?? s.venue;
+        const full = assessEligibility(venue, false);
+        if (full) next.push({ ...full, estimatedExtraSec: s.estimatedExtraSec });
+      }
+      shortlist = next;
+      lap("details");
+    }
 
     // 5. Verify the most promising stops as complete journeys.
     const verifyOrder = [...shortlist].sort((a, b) => {

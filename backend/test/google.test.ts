@@ -11,7 +11,7 @@ import { AppError } from "../src/errors.js";
 import { SharedRun } from "../src/lib/cache.js";
 import { haversineM } from "../src/lib/geo.js";
 import { QuotaManager, secondsUntilIstMonth } from "../src/lib/quota.js";
-import { GOOGLE_DETAILS_FIELDS, GOOGLE_NEARBY_FIELDS, googleDetails, googleNearby, toGoogleVenue } from "../src/providers/google.js";
+import { GOOGLE_DETAILS_FIELDS, GOOGLE_NEARBY_FIELDS, googleDetails, googleNearby, googlePhotoUri, toGoogleVenue } from "../src/providers/google.js";
 import type { ProviderContext } from "../src/providers/context.js";
 import { discoverGoogleVenues } from "../src/services/googleDiscovery.js";
 import { evaluateHours } from "../src/services/hours.js";
@@ -150,6 +150,23 @@ describe("Google Places request controls", () => {
     await expect(googleNearby(h.ctx, mid, 50001)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.requests).toHaveLength(0);
   });
+  it("resolves a photo with one budgeted request and refuses bad references or foreign hosts", async () => {
+    const h = harness();
+    const calls: URL[] = [];
+    let photoUri = "https://lh3.googleusercontent.com/places/abc=s800";
+    h.ctx.fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input)); calls.push(url);
+      return Response.json({ name: "places/test1/photos/photo1/media", photoUri });
+    }) as typeof fetch;
+    expect(await googlePhotoUri(h.ctx, "places/test1/photos/photo1", 5000)).toBe(photoUri);
+    expect(calls[0]!.searchParams.get("maxWidthPx")).toBe("1600");
+    expect(calls[0]!.searchParams.get("skipHttpRedirect")).toBe("true");
+    expect(h.ctx.quota.snapshot().buckets.google_places_photos.used).toBe(1);
+    await expect(googlePhotoUri(h.ctx, "places/test1/../secrets", 800)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    photoUri = "https://evil.example.com/x.jpg";
+    await expect(googlePhotoUri(h.ctx, "places/test1/photos/photo1", 800)).rejects.toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+    expect(calls).toHaveLength(2);
+  });
   it("enforces daily and monthly budgets before network traffic", async () => {
     for (const options of [{ nearbyDay: 1 }, { nearbyMonth: 1 }]) {
       const h = harness(undefined, options); await googleNearby(h.ctx, mid, 500);
@@ -209,12 +226,37 @@ describe("Google route discovery and recommendations (mocked providers)", () => 
     expect(result.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ id: "google:no-lunch", stage: "meal" })]));
     expect(result.recommendations).toEqual(expect.arrayContaining([expect.objectContaining({ id: "google:unknown-lunch", mealPeriod: "lunch", mealRecommendation: expect.objectContaining({ service: "unknown" }) })]));
   });
-  it("enforces the detail shortlist limit and reports the unchecked places", async () => {
+  it("route-checks every corridor place while keeping Place Details within the per-request cap", async () => {
     const items = Array.from({ length: 7 }, (_, i) => fixture(`limit${i}`, eastOf(source, 1000 + i * 650)));
     const h = harness(items, { detailsCap: 2 }); const result = await recommend(h.ctx, input, "limited");
     expect(h.requests.filter((r) => r.init?.method === "GET")).toHaveLength(2);
     expect(result.diagnostics.inCorridor).toBe(7);
-    expect(result.diagnostics.notEvaluated).toBe(5);
+    expect(result.diagnostics.notEvaluated).toBe(0);
+    expect(result.recommendations).toHaveLength(7);
+    // Places beyond the cap are still listed, honestly marked as not enriched.
+    const statuses = result.recommendations.map((r) => r.google?.detailsStatus);
+    expect(statuses.filter((s) => s === "available")).toHaveLength(2);
+    expect(statuses.filter((s) => s === "not-requested")).toHaveLength(5);
+  });
+  it("says when vegetarian status wasn't loaded rather than claiming the listing lacks it", async () => {
+    const items = Array.from({ length: 3 }, (_, i) => fixture(`veg${i}`, eastOf(source, 1500 + i * 1500)));
+    const h = harness(items, { detailsCap: 1 });
+    const result = await recommend(h.ctx, { ...input, preferences: { ...input.preferences, diet: "vegetarian-options" } }, "veg");
+    expect(result.recommendations).toHaveLength(1);
+    const notLoaded = result.excluded.filter((e) => e.stage === "diet");
+    expect(notLoaded).toHaveLength(2);
+    expect(notLoaded[0]!.reason).toMatch(/wasn't loaded within this search's details limit/);
+  });
+  it("spends the details budget on the stops with the least extra driving, not the nearest in a straight line", async () => {
+    const items = Array.from({ length: 4 }, (_, i) => fixture(`fast${i}`, north(eastOf(source, 1500 + i * 1000), 30)));
+    const h = harness(items, { detailsCap: 2 });
+    // The two straight-line-closest places hide a slow access road (e.g. a long U-turn).
+    h.world.places[0]!.accessPenaltySec = 400;
+    h.world.places[1]!.accessPenaltySec = 400;
+    const result = await recommend(h.ctx, input, "fastest-first");
+    const detailed = h.requests.filter((r) => r.init?.method === "GET").map((r) => r.url.pathname.split("/").pop());
+    expect(detailed.sort()).toEqual(["fast2", "fast3"]);
+    expect(result.recommendations[0]!.google?.detailsStatus).toBe("available");
   });
   it("applies dietary rules after details enrichment and does not accept vegetarian options as pure veg", async () => {
     const h = harness();
@@ -321,7 +363,8 @@ describe("Google recommendations with account preferences", () => {
     expect(result.preferenceContext).toMatchObject({ source: "saved", overriddenFields: [], budgetApplied: true,
       preferences: { diet: "pure-veg", cuisines: ["pizza"], maxDetourMinutes: 5, budgetPerPersonInr: 300 } });
     expect(result.recommendations).toHaveLength(0);
-    expect(result.excluded[0].stage).toBe("diet");
+    // The saved "pizza" choice rules it out from search data alone, before any paid details call.
+    expect(result.excluded[0].stage).toBe("cuisine");
     expect(store.find).toHaveBeenCalledWith("alice");
   });
 

@@ -1,0 +1,182 @@
+{
+  "test": "Foursquare default-Pro search and details smoke test",
+  "startedAt": "2026-10-29T18:36:24.139Z",
+  "credentialVariable": "FOURSQAURE_API_KEY",
+  "apiHost": "places-api.foursquare.com",
+  "apiVersion": "2025-06-17",
+  "maxRequests": 3,
+  "premiumFieldsRequested": false,
+  "attempts": [
+    {
+      "label": "Kandivali restaurant search",
+      "path": "/places/search",
+      "parameters": {
+        "ll": "19.2040,72.8520",
+        "radius": "2500",
+        "query": "restaurant",
+        "limit": "10",
+        "sort": "DISTANCE"
+      },
+      "durationMs": 700,
+      "httpStatus": 200,
+      "rateLimits": {
+        "x-ratelimit-burst-limit": "150",
+        "x-ratelimit-burst-remaining": "149",
+        "x-ratelimit-limit": "180000",
+        "x-ratelimit-path": "/v3/places/search",
+        "x-ratelimit-remaining": "179996",
+        "x-ratelimit-reset": "1793299666"
+      },
+      "count": 10,
+      "fieldCoverage": {
+        "tel": 6,
+        "website": 0,
+        "hours": 0,
+        "rating": 0,
+        "stats": 0,
+        "price": 0,
+        "photos": 0,
+        "attributes": 0
+      },
+      "examples": [
+        {
+          "name": "Sarovar Restaurant",
+          "categories": [
+            "Indian Restaurant",
+            "Vegan and Vegetarian Restaurant"
+          ],
+          "address": "Payyade International, (V.L. Road,Kandivali west.), Mumbai 400067, Mahārāshtra",
+          "distanceM": 94
+        },
+        {
+          "name": "Monginis Cake Shop",
+          "categories": [
+            "Bakery"
+          ],
+          "address": "kandivli, Mumbai 400 093, Mahārāshtra",
+          "distanceM": 110
+        },
+        {
+          "name": "Hotel Lata",
+          "categories": [
+            "Diner"
+          ],
+          "address": "Kandivali(west), Mumbai 400067, Mahārāshtra",
+          "distanceM": 110
+        },
+        {
+          "name": "Jain Sweet and Bhelpuri House",
+          "categories": [
+            "Snack Place"
+          ],
+          "address": "Near Kandivali Station, 400067, Mahārāshtra",
+          "distanceM": 111
+        }
+      ]
+    },
+    {
+      "label": "Borivali restaurant search",
+      "path": "/places/search",
+      "parameters": {
+        "ll": "19.2307,72.8567",
+        "radius": "2500",
+        "query": "restaurant",
+        "limit": "10",
+        "sort": "DISTANCE"
+      },
+      "durationMs": 189,
+      "httpStatus": 200,
+      "rateLimits": {
+        "x-ratelimit-burst-limit": "150",
+        "x-ratelimit-burst-remaining": "149",
+        "x-ratelimit-limit": "0",
+        "x-ratelimit-path": "/v3/places/search",
+        "x-ratelimit-remaining": "0"
+      },
+      "count": 10,
+      "fieldCoverage": {
+        "tel": 5,
+        "website": 1,
+        "hours": 0,
+        "rating": 0,
+        "stats": 0,
+        "price": 0,
+        "photos": 0,
+        "attributes": 0
+      },
+      "examples": [
+        {
+          "name": "Gora Gandhi Juice Corner and Veg World - Pure Veg",
+          "categories": [
+            "Snack Place"
+          ],
+          "address": "Opp. Borivali Railway Station (Borivali West), Mumbai 400082, Mahārāshtra",
+          "distanceM": 21
+        },
+        {
+          "name": "JumboKing",
+          "categories": [
+            "Burger Joint"
+          ],
+          "address": "",
+          "distanceM": 26
+        },
+        {
+          "name": "Raju's Chinese Truck",
+          "categories": [
+            "Asian Restaurant"
+          ],
+          "address": "Satya Nagar (Borivali West), Mumbai, Mahārāshtra",
+          "distanceM": 34
+        },
+        {
+          "name": "Kababchini",
+          "categories": [
+            "Indian Restaurant"
+          ],
+          "address": "Shop No 3, Goarai Datta Prasad, Plot No 1, Gorai Road, Borivali West, Mumbai, Mahārāshtra",
+          "distanceM": 52
+        }
+      ]
+    },
+    {
+      "label": "Default-Pro place details",
+      "path": "/places/4d170b416d103704b63d34bd",
+      "parameters": {},
+      "durationMs": 661,
+      "httpStatus": 200,
+      "rateLimits": {
+        "x-ratelimit-burst-limit": "150",
+        "x-ratelimit-burst-remaining": "149",
+        "x-ratelimit-limit": "180000",
+        "x-ratelimit-path": "/v3/places/X",
+        "x-ratelimit-remaining": "179994",
+        "x-ratelimit-reset": "1793299666"
+      },
+      "count": 1,
+      "fieldCoverage": {
+        "tel": 1,
+        "website": 0,
+        "hours": 0,
+        "rating": 0,
+        "stats": 0,
+        "price": 0,
+        "photos": 0,
+        "attributes": 0
+      },
+      "examples": [
+        {
+          "name": "Sarovar Restaurant",
+          "categories": [
+            "Indian Restaurant",
+            "Vegan and Vegetarian Restaurant"
+          ],
+          "address": "Payyade International, (V.L. Road,Kandivali west.), Mumbai 400067, Mahārāshtra",
+          "distanceM": null
+        }
+      ]
+    }
+  ],
+  "successfulRequests": 3,
+  "status": "passed"
+}

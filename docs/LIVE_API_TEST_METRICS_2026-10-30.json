@@ -1,0 +1,240 @@
+{
+  "testedAt": "2026-10-29T18:35:54.799Z",
+  "capabilities": {
+    "geoapify": true,
+    "mapbox": true,
+    "searchLogging": false
+  },
+  "upstreamSummary": [
+    {
+      "provider": "api.geoapify.com",
+      "calls": 11,
+      "statuses": {
+        "200": 11
+      }
+    },
+    {
+      "provider": "api.mapbox.com",
+      "calls": 53,
+      "statuses": {
+        "200": 53
+      }
+    }
+  ],
+  "cases": [
+    {
+      "label": "Readiness",
+      "httpStatus": 200,
+      "durationMs": 48,
+      "data": {
+        "status": "ready",
+        "capabilities": {
+          "geoapify": true,
+          "mapbox": true,
+          "searchLogging": false
+        },
+        "problems": []
+      }
+    },
+    {
+      "label": "Location: Kandivali West",
+      "httpStatus": 200,
+      "durationMs": 969,
+      "providers": {
+        "geoapify": "ok",
+        "mapbox": "ok"
+      },
+      "partial": false,
+      "suggestionCountShown": 4
+    },
+    {
+      "label": "Location: Borivali East",
+      "httpStatus": 200,
+      "durationMs": 674,
+      "providers": {
+        "geoapify": "ok",
+        "mapbox": "ok"
+      },
+      "partial": false,
+      "suggestionCountShown": 4
+    },
+    {
+      "label": "Location: Borivli",
+      "httpStatus": 200,
+      "durationMs": 362,
+      "providers": {
+        "geoapify": "ok",
+        "mapbox": "ok"
+      },
+      "partial": false,
+      "suggestionCountShown": 4
+    },
+    {
+      "label": "Location: Andheri East",
+      "httpStatus": 200,
+      "durationMs": 429,
+      "providers": {
+        "geoapify": "ok",
+        "mapbox": "ok"
+      },
+      "partial": false,
+      "suggestionCountShown": 4
+    },
+    {
+      "label": "Location: बोरीवली",
+      "httpStatus": 200,
+      "durationMs": 92,
+      "providers": {
+        "geoapify": "ok",
+        "mapbox": "ok"
+      },
+      "partial": false,
+      "suggestionCountShown": 4
+    },
+    {
+      "label": "Geoapify food venues: Kandivali",
+      "status": "passed",
+      "durationMs": 327,
+      "count": 12,
+      "malformed": 4,
+      "saturated": false,
+      "withHours": 5,
+      "withPhone": 1,
+      "withDietEvidence": 1
+    },
+    {
+      "label": "Geoapify food venues: Borivali",
+      "status": "passed",
+      "durationMs": 405,
+      "count": 7,
+      "malformed": 1,
+      "saturated": false,
+      "withHours": 4,
+      "withPhone": 0,
+      "withDietEvidence": 4
+    },
+    {
+      "label": "Route: Leave now",
+      "httpStatus": 200,
+      "durationMs": 4447,
+      "source": "Kandiwali West",
+      "destination": "Borivali East",
+      "departure": {
+        "mode": "now"
+      },
+      "route": {
+        "distanceKm": 3.57,
+        "durationMinutes": 13.4,
+        "alternativeCount": 2
+      },
+      "count": 5,
+      "diagnostics": {
+        "corridorHalfWidthM": 1500,
+        "searchAreas": {
+          "total": 3,
+          "failed": 0,
+          "truncated": 3
+        },
+        "discovered": {
+          "geoapify": 81,
+          "mapbox": 275,
+          "merged": 255,
+          "malformedDropped": 11
+        },
+        "inCorridor": 208,
+        "screened": 46,
+        "verified": 8,
+        "notEvaluated": 121,
+        "excludedByStage": {
+          "hours": 82
+        },
+        "providers": {
+          "geoapify": "ok",
+          "mapbox": "ok"
+        },
+        "stageMs": {
+          "route": 124,
+          "discovery": 2281,
+          "eligibility": 43,
+          "screening": 1525,
+          "verification": 455,
+          "ranking": 2
+        },
+        "warnings": [
+          "3 busy stretches of your route had more restaurants than our free data sources return in one search, so some places there were not considered.",
+          "121 more places along your route weren't checked in detail because each search has a fixed free routing budget."
+        ]
+      }
+    },
+    {
+      "label": "Route: Next lunch at 12:00 IST",
+      "httpStatus": 200,
+      "durationMs": 815,
+      "source": "Kandiwali West",
+      "destination": "Borivali East",
+      "departure": {
+        "mode": "at",
+        "time": "2026-10-30T06:30:00.000Z"
+      },
+      "route": {
+        "distanceKm": 3.57,
+        "durationMinutes": 13.4,
+        "alternativeCount": 2
+      },
+      "count": 8,
+      "diagnostics": {
+        "corridorHalfWidthM": 1500,
+        "searchAreas": {
+          "total": 3,
+          "failed": 0,
+          "truncated": 3
+        },
+        "discovered": {
+          "geoapify": 81,
+          "mapbox": 275,
+          "merged": 255,
+          "malformedDropped": 11
+        },
+        "inCorridor": 208,
+        "screened": 46,
+        "verified": 8,
+        "notEvaluated": 183,
+        "excludedByStage": {
+          "hours": 17
+        },
+        "providers": {
+          "geoapify": "ok",
+          "mapbox": "ok"
+        },
+        "stageMs": {
+          "route": 13,
+          "discovery": 97,
+          "eligibility": 25,
+          "screening": 561,
+          "verification": 114,
+          "ranking": 2
+        },
+        "warnings": [
+          "3 busy stretches of your route had more restaurants than our free data sources return in one search, so some places there were not considered.",
+          "183 more places along your route weren't checked in detail because each search has a fixed free routing budget."
+        ]
+      }
+    },
+    {
+      "label": "Reject identical endpoints without upstream calls",
+      "httpStatus": 400,
+      "error": {
+        "code": "BAD_REQUEST",
+        "message": "Your start and destination are the same place. Choose a different destination.",
+        "details": {
+          "fieldErrors": {
+            "destination": [
+              "Must differ from the start."
+            ]
+          }
+        },
+        "requestId": "5fe0aae5-18cd-4783-aa28-46036cce8b15"
+      }
+    }
+  ]
+}

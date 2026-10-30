@@ -45,6 +45,7 @@ export function createProviderContext(config: AppConfig): ProviderContext {
       geoapify_credits: 0, mapbox_geocode: 0, mapbox_searchbox: 0, mapbox_directions: 0, mapbox_matrix_elements: 0,
       google_places_nearby: config.GOOGLE_PLACES_NEARBY_PER_MONTH,
       google_places_details: config.GOOGLE_PLACES_DETAILS_PER_MONTH,
+      google_places_photos: config.GOOGLE_PLACES_PHOTOS_PER_MONTH,
     }, config.GOOGLE_PLACES_QUOTA_FILE, () => new Date(), "month"),
     quota: new QuotaManager(
       {
@@ -55,6 +56,7 @@ export function createProviderContext(config: AppConfig): ProviderContext {
         mapbox_matrix_elements: config.BUDGET_MAPBOX_MATRIX_ELEMENTS_PER_DAY,
         google_places_nearby: config.GOOGLE_PLACES_NEARBY_PER_DAY,
         google_places_details: config.GOOGLE_PLACES_DETAILS_PER_DAY,
+        google_places_photos: config.GOOGLE_PLACES_PHOTOS_PER_DAY,
         google_routes: config.GOOGLE_ROUTES_PER_DAY,
         google_route_matrix_elements: config.GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY,
       },

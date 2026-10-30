@@ -7,7 +7,7 @@ import { AppError } from "../errors.js";
 import { asyncHandler, clientKey } from "../lib/express.js";
 import { ClientRateLimiter } from "../lib/quota.js";
 import type { ProviderContext } from "../providers/context.js";
-import { googleDetails } from "../providers/google.js";
+import { GOOGLE_PHOTO_NAME, googleDetails, googlePhotoUri } from "../providers/google.js";
 import { recommendRouter } from "./recommend.js";
 import type { PreferencesService } from "../services/preferences.js";
 
@@ -31,6 +31,17 @@ export function googleRouter(config: AppConfig, ctx: ProviderContext, auth: Auth
       vegetarian: restaurant.vegetarian, openingHoursText: restaurant.hours?.kind === "google" ? restaurant.hours.text : null,
       google: restaurant.google,
     }, attribution: ["Google Maps"] });
+  }));
+  // Redirects an <img> to Google's short-lived photo URL. Used only on restaurant detail pages.
+  const photoLimiter = new ClientRateLimiter(15);
+  router.get("/photo", asyncHandler(async (req, res) => {
+    const name = typeof req.query.name === "string" ? req.query.name : "";
+    if (!GOOGLE_PHOTO_NAME.test(name)) throw new AppError("BAD_REQUEST", "Invalid Google photo reference.");
+    photoLimiter.check(`${req.user!.id}:${clientKey(req)}`);
+    const width = Number(req.query.w) || 800;
+    const uri = await googlePhotoUri(ctx, name, width, req.abortSignal);
+    res.setHeader("Cache-Control", "private, max-age=600");
+    res.redirect(302, uri);
   }));
   router.use("/recommend", requireTrustedOrigin(config), recommendRouter({ ...ctx, restaurantSource: "google" }, new ClientRateLimiter(2), searchLog, preferences));
   return router;

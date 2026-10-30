@@ -13,6 +13,7 @@ export type BudgetBucket =
   | "geoapify_credits"
   | "google_places_nearby"
   | "google_places_details"
+  | "google_places_photos"
   | "google_routes"
   | "google_route_matrix_elements"
   | "mapbox_geocode"

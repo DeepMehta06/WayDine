@@ -7,7 +7,10 @@ import { z } from "zod";
 import type {
   ApiErrorCode,
   AuthMeResponse,
+  GoogleRecommendRequest,
+  GoogleRecommendResponse,
   LngLat,
+  UserPreferencesPatch,
   PlaceSuggestion,
   Recommendation,
   RecommendRequest,
@@ -213,6 +216,66 @@ const authSchema = z.object({ user: z.object({ id: z.string(), email: z.string()
 const preferenceSchema = z.object({ preferences: z.object({ diet: z.enum(["any", "vegetarian-options", "pure-veg"]), cuisines: z.array(z.enum(["north indian", "south indian", "maharashtrian", "gujarati", "chinese", "pizza", "burger", "biryani", "seafood", "cafe", "bakery", "dessert", "street food"])), includeUnconfirmedDiet: z.boolean(), maxDetourMinutes: z.number(), budgetPerPersonInr: z.number().nullable() }), saved: z.boolean(), updatedAt: z.string().nullable() }) satisfies z.ZodType<UserPreferencesResponse>;
 export const getAccount = () => request("/api/auth/me", authSchema);
 export const getPreferences = () => request("/api/me/preferences", preferenceSchema);
+
+export function savePreferences(patch: UserPreferencesPatch): Promise<UserPreferencesResponse> {
+  return request("/api/me/preferences", preferenceSchema, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+}
+
+export function resetPreferences(): Promise<UserPreferencesResponse> {
+  return request("/api/me/preferences", preferenceSchema, { method: "DELETE" });
+}
+
+const userPreferencesSchema = preferenceSchema.shape.preferences;
+const googleRecommendSchema = recommendSchema.extend({
+  preferenceContext: z.object({
+    preferences: userPreferencesSchema,
+    source: z.enum(["saved", "defaults"]),
+    overriddenFields: z.array(z.enum(["diet", "cuisines", "includeUnconfirmedDiet", "maxDetourMinutes", "budgetPerPersonInr"])),
+    budgetApplied: z.boolean(),
+  }),
+}) satisfies z.ZodType<GoogleRecommendResponse>;
+
+/** Google-backed search: saved account preferences apply, with optional per-trip overrides. */
+export function fetchGoogleRecommendations(body: GoogleRecommendRequest, signal: AbortSignal): Promise<GoogleRecommendResponse> {
+  return request("/api/google/recommend", googleRecommendSchema, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+const googleDetailsSchema = recommendationSchema.shape.google.unwrap();
+const restaurantDetailsSchema = z.object({
+  restaurant: z.object({
+    id: z.string(),
+    name: z.string(),
+    location: lngLat,
+    address: z.string().nullable(),
+    phone: z.string().nullable(),
+    website: z.string().nullable(),
+    cuisines: z.array(z.string()),
+    venueType: z.string().nullable(),
+    vegetarian: z.enum(["pure-veg", "options", "none", "unknown"]),
+    openingHoursText: z.string().nullable(),
+    google: googleDetailsSchema.optional(),
+  }),
+  attribution: z.array(z.string()),
+});
+export type RestaurantDetails = z.infer<typeof restaurantDetailsSchema>["restaurant"];
+
+/** One billable Google Place Details request (includes up to 5 reviews). */
+export function getRestaurantDetails(placeId: string, signal?: AbortSignal) {
+  return request(`/api/google/restaurants/${encodeURIComponent(placeId)}`, restaurantDetailsSchema, { signal });
+}
+
+/** Image URL for a Google photo reference. Each load is one billable Place Photo request. */
+export function googlePhotoUrl(name: string, width = 800): string {
+  return `${API_BASE}/api/google/photo?${new URLSearchParams({ name, w: String(width) })}`;
+}
+
+const authStatusSchema = z.object({ enabled: z.boolean(), provider: z.literal("google") });
+export const getAuthStatus = () => request("/api/auth/status", authStatusSchema);
 export const googleSignInUrl = `${API_BASE}/api/auth/google`;
 export async function signOut(): Promise<void> {
   let response: Response;

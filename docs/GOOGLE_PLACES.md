@@ -27,7 +27,7 @@ Defaults (also listed in `backend/.env.example`):
 | Setting | Default |
 | --- | --- |
 | `GOOGLE_PLACES_ENABLED` | `false` |
-| `GOOGLE_PLACES_NEARBY_PER_DAY` | `10` |
+| `GOOGLE_PLACES_NEARBY_PER_DAY` | `20` |
 | `GOOGLE_PLACES_DETAILS_PER_DAY` | `20` |
 | `GOOGLE_PLACES_NEARBY_PER_MONTH` | `100` |
 | `GOOGLE_PLACES_DETAILS_PER_MONTH` | `100` |

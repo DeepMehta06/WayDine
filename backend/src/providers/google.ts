@@ -127,6 +127,31 @@ export async function googleNearby(ctx: ProviderContext, center: LngLat, radiusM
   return { venues, malformed, saturated: places.length >= GOOGLE_NEARBY_LIMIT };
 }
 
+/** Photo resource names as returned in Place Details: places/{placeId}/photos/{reference}. */
+export const GOOGLE_PHOTO_NAME = /^places\/[A-Za-z0-9_-]{1,256}\/photos\/[A-Za-z0-9_-]{1,1024}$/;
+
+/**
+ * Resolves one photo to a short-lived Google-hosted image URL. One billable
+ * Place Photo request per call; nothing is downloaded or stored by WayDine.
+ */
+export async function googlePhotoUri(ctx: ProviderContext, name: string, maxWidthPx: number, signal?: AbortSignal): Promise<string> {
+  const key = enabled(ctx);
+  if (!GOOGLE_PHOTO_NAME.test(name)) throw new AppError("BAD_REQUEST", "Invalid Google photo reference.");
+  const width = Math.min(1600, Math.max(200, Math.round(maxWidthPx)));
+  const result = await fetchJson({
+    url: `https://places.googleapis.com/v1/${name}/media?maxWidthPx=${width}&skipHttpRedirect=true`,
+    schema: z.object({ photoUri: z.string() }), provider: "google-places", quota: ctx.quota,
+    budget: { bucket: "google_places_photos", units: 1 },
+    additionalBudget: ctx.googleMonthlyQuota ? { quota: ctx.googleMonthlyQuota, bucket: "google_places_photos", units: 1 } : undefined,
+    headers: { "X-Goog-Api-Key": key }, retries: 0, logResponseBody: false, signal, fetchImpl: ctx.fetchImpl, mapStatus: googleStatusError,
+  });
+  const uri = safeHttpUrl(result.photoUri);
+  if (!uri || !/^https:\/\/[a-z0-9.-]+\.(googleusercontent|ggpht|googleapis)\.com\//.test(uri)) {
+    throw new AppError("UPSTREAM_UNAVAILABLE", "Google returned an unexpected photo address.");
+  }
+  return uri;
+}
+
 export async function googleDetails(ctx: ProviderContext, id: string, signal?: AbortSignal, includeReviews = false): Promise<Venue> {
   enabled(ctx);
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(id)) throw new AppError("BAD_REQUEST", "Invalid Google place ID.");
