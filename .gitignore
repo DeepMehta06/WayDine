@@ -12,3 +12,4 @@ coverage/
 /backend/.data/google-places-monthly.json
 /backend/.data/osm-demo.json
 /backend/.data/overpass-test.json
+/backend/.data/osm-cache/

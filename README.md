@@ -127,6 +127,35 @@ Save the result as `backend/.data/osm-demo.json`, set
 This bounding box does not cover Mumbai–Pune. An extract must cover the whole
 route and possible detours; an absent path is not proof that a road is unreachable.
 
+### WayDine graph engine (`ROUTING_ENGINE=graph`)
+
+With `ROUTING_ENGINE=graph` in `backend/.env`, candidate stops are routed by
+WayDine's own algorithm instead of Google's matrix and via-route calls:
+
+1. Google Routes supplies only the baseline route (used to find restaurants in the
+   200 m corridor and for display). Google Places supplies the restaurants.
+2. The road graph comes from `OSM_GRAPH_SOURCE`: `file` (a regional extract such as
+   the Mira Road–Borivali one above) or `overpass` (the corridor around the route
+   is downloaded once and cached under `GRAPH_CACHE_DIR`; later searches for the
+   same corridor are instant). The route must lie inside the extract.
+3. The start and destination are snapped onto the graph and each restaurant is
+   snapped to the nearest non-motorway road within 75 m. For each, Dijkstra
+   (honouring one-ways and turn restrictions) gives
+   `shortest(start → stop → destination) − shortest(start → destination)`
+   on the same graph.
+4. Reversals at through-junctions are counted as U-turns; the via path is compared
+   with the baseline path to find backward travel. A stop needing 1 km or more of
+   backward travel is excluded; other findings add ranking penalties.
+5. Graph times use class-based speeds, so they are scaled to Google's duration for
+   your route. The orange route drawn for a stop is the graph path.
+6. The top `GRAPH_CROSSCHECK_TOP` stops are re-checked with Google Routes; a large
+   disagreement is shown as an uncertainty and never changes the ranking.
+
+If the graph cannot be prepared (extract missing or not covering the route, Overpass
+down, endpoints not near a road) the search falls back to Google routing and says so
+in `routing.fallbackReason` and the search notes. Road data is OpenStreetMap
+(© OpenStreetMap contributors); turn restrictions and access may be incomplete.
+
 1. **Discover** — obtain a Mapbox driving route and search for food places
    along it; the opt-in Google route uses a 200 m point-to-polyline corridor.
 2. **Screen and verify** — apply food preferences, estimate detours with Matrix,

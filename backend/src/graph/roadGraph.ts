@@ -6,7 +6,7 @@ export interface OsmNode { type: "node"; id: number; lat: number; lon: number }
 export interface OsmWay { type: "way"; id: number; nodes: number[]; tags?: Record<string, string> }
 export interface OsmRelation { type: "relation"; id: number; members: Array<{ type: string; ref: number; role: string }>; tags?: Record<string, string> }
 export type OsmElement = OsmNode | OsmWay | OsmRelation;
-export interface RoadEdge { from: number; to: number; way: number; distanceM: number; seconds: number; trafficKey?: string }
+export interface RoadEdge { from: number; to: number; way: number; distanceM: number; seconds: number; trafficKey?: string; /** OSM highway class, so stops are never snapped onto a motorway carriageway. */ highway?: string }
 export interface TurnRule { fromWay: number; toWay: number; via: number; kind: "no" | "only"; uturn: boolean; straight: boolean }
 export interface RoadGraph { nodes: Map<number, LngLat>; outgoing: Map<number, RoadEdge[]>; restrictions: Map<number, TurnRule[]>; warnings: string[] }
 
@@ -49,8 +49,8 @@ export function buildRoadGraph(elements: OsmElement[]): RoadGraph {
       if (!a || !b) { incomplete = true; continue; }
       const distanceM = haversineM(a, b); if (distanceM === 0) continue;
       const seconds = distanceM / (speed(tags) / 3.6);
-      if (forward) add({ from, to, way: e.id, distanceM, seconds });
-      if (reverse) add({ from: to, to: from, way: e.id, distanceM, seconds });
+      if (forward) add({ from, to, way: e.id, distanceM, seconds, highway });
+      if (reverse) add({ from: to, to: from, way: e.id, distanceM, seconds, highway });
     }
   }
   let unsupported = false;

@@ -2,8 +2,11 @@
 import type { AppConfig } from "../config.js";
 import { TtlCache, InFlight, SharedRun } from "../lib/cache.js";
 import { QuotaManager } from "../lib/quota.js";
+import { createTripGraphLoader, type TripGraphLoader } from "../graph/tripGraph.js";
 
 export interface ProviderContext {
+  /** WayDine's own routing engine; absent means Google routing is used for every stage. */
+  graph?: { load: TripGraphLoader; crossCheckTop: number };
   geoapifyKey?: string;
   mapboxToken?: string;
   googleRoutesKey?: string;
@@ -24,6 +27,9 @@ export interface ProviderContext {
 
 export function createProviderContext(config: AppConfig): ProviderContext {
   return {
+    graph: config.ROUTING_ENGINE === "graph"
+      ? { load: createTripGraphLoader({ source: config.OSM_GRAPH_SOURCE, path: config.OSM_GRAPH_PATH, cacheDir: config.GRAPH_CACHE_DIR, fetchImpl: fetch }), crossCheckTop: config.GRAPH_CROSSCHECK_TOP }
+      : undefined,
     geoapifyKey: config.GEOAPIFY_API_KEY,
     // Google Maps cannot display Mapbox search/geocoding features. The legacy
     // browser endpoints use Geoapify for discovery and place search instead.

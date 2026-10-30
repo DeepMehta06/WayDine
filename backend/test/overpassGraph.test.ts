@@ -16,7 +16,7 @@ it("fetches a bounded road graph for trip endpoints and calculates the selected 
   const init = fake.mock.calls[0]![1] as RequestInit;
   expect(new Headers(init.headers).get("User-Agent")).toContain("WayDine/");
   const query = new URLSearchParams(String(init.body)).get("data")!;
-  expect(query).toContain("around:3000,19.21000,72.84000,19.23000,72.86000");
+  expect(query).toContain("around:1500,19.21000,72.84000,19.23000,72.86000");
   expect(query).toContain("type=restriction");
   const preview = makeGraphPreview(graph, origin, destination, middle);
   expect(preview.geometry).toEqual([origin, middle, destination]);

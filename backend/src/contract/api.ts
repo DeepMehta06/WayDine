@@ -201,6 +201,22 @@ export interface Recommendation<P extends RestaurantProvider = RestaurantProvide
   routeAssessment?: RouteAssessment;
   /** Available on Google-backed restaurant recommendations. */
   google?: GoogleRestaurantDetails;
+  /** Present when WayDine's own graph engine (Dijkstra over OpenStreetMap) computed this stop's route. */
+  routing?: {
+    engine: "graph";
+    /** Extra seconds in the graph's own time model, before scaling to the Google baseline. */
+    rawExtraSec: number;
+    uTurns: number;
+    /** Independent Google Routes result for the best stops; absent when not requested. */
+    crossCheck?: { status: "agrees" | "differs" | "unavailable"; googleExtraSec: number | null; differenceSec: number | null };
+  };
+}
+
+export interface RoutingSummary {
+  engine: "graph" | "google";
+  /** Why the graph engine was not used when it was configured. */
+  fallbackReason?: string;
+  graph?: { nodes: number; baselineSec: number; baselineM: number; googleBaselineSec: number; timeScale: number; warnings: string[] };
 }
 
 export interface GoogleRestaurantDetails {
@@ -267,6 +283,7 @@ export interface RecommendResponse<P extends RestaurantProvider = RestaurantProv
   requestId: string;
   timeZone: "Asia/Kolkata";
   route: RouteSummary;
+  routing?: RoutingSummary;
   recommendations: Recommendation<P>[];
   excluded: ExcludedPlace[];
   diagnostics: RecommendDiagnostics<P>;

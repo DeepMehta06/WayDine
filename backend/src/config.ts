@@ -24,6 +24,10 @@ const envSchema = z.object({
   GOOGLE_ROUTES_API_KEY: optionalNonEmpty,
   OSM_GRAPH_PATH: optionalNonEmpty,
   OSM_GRAPH_SOURCE: z.enum(["file", "overpass"]).default("file"),
+  // graph: rank stops with WayDine's own Dijkstra over OSM data (Google only for the baseline and cross-check).
+  ROUTING_ENGINE: z.enum(["google", "graph"]).default("google"),
+  GRAPH_CACHE_DIR: z.string().default(".data/osm-cache"),
+  GRAPH_CROSSCHECK_TOP: z.coerce.number().int().min(0).max(5).default(3),
   GOOGLE_ROUTES_PER_DAY: positiveInt(100),
   GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY: positiveInt(300),
   GOOGLE_PLACES_ENABLED: z.enum(["true", "false"]).default("false"),
@@ -70,6 +74,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const c = parsed.data;
   if (c.GOOGLE_PLACES_ENABLED === "true" && !c.GOOGLE_PLACES_API_KEY) {
     throw new Error("GOOGLE_PLACES_ENABLED=true requires GOOGLE_PLACES_API_KEY.");
+  }
+  if (c.ROUTING_ENGINE === "graph" && c.OSM_GRAPH_SOURCE === "file" && !c.OSM_GRAPH_PATH) {
+    throw new Error("ROUTING_ENGINE=graph with OSM_GRAPH_SOURCE=file requires OSM_GRAPH_PATH (or set OSM_GRAPH_SOURCE=overpass).");
   }
   if (c.AUTH_ENABLED === "true") {
     const missing = (["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "AUTH_ENCRYPTION_KEY"] as const).filter((key) => !c[key]);

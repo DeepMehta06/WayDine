@@ -15,6 +15,8 @@ import type {
   RestaurantProvider as Provider,
   Recommendation,
   RecommendResponse,
+  RouteAssessment,
+  RoutingSummary,
 } from "../contract/api.js";
 import { AppError } from "../errors.js";
 import { simplifyLine } from "../lib/geo.js";
@@ -28,7 +30,8 @@ import { corridorHalfWidthM, discoverVenues, type CorridorVenue } from "./discov
 import { cuisineDecision, dietDecision } from "./eligibility.js";
 import { evaluateHours } from "./hours.js";
 import { explain, formatMinutes, sortByRankingCost, RANKING_PENALTIES_SEC, type RankInput } from "./ranking.js";
-import { directions as getDirections, screenByMatrix, SCREEN_BATCH, verifyStops } from "./routing.js";
+import { directions as getDirections, screenByMatrix, SCREEN_BATCH, verifyStops, type ViaRoute } from "./routing.js";
+import { prepareGraphTrip, type GraphStop, type GraphTrip } from "./graphRouting.js";
 import { assessRoute } from "./routeEvidence.js";
 import { mealRecommendation } from "./meal.js";
 import { assessBudget } from "./budget.js";
@@ -40,7 +43,15 @@ export const RECOMMEND_LIMITS = {
   /** Screening estimates beyond budget*1.5 + 2 min are not worth verifying. */
   screenSlackFactor: 1.5,
   screenSlackSec: 120,
+  /** Candidates routed with the graph engine; each needs a snap and two Dijkstra runs (~0.3 s on a 70k-node extract). */
+  graphEvalMax: 12,
+  /** Reaching a stop by driving this far backward along the route excludes it (graph engine only). */
+  graphBackwardExcludeM: 1000,
 };
+
+type Verified =
+  | { ok: true; via: ViaRoute; assessment?: RouteAssessment; graph?: GraphStop }
+  | { ok: false; error: unknown };
 
 export interface RecommendInput {
   source: LngLat;
@@ -210,49 +221,96 @@ export async function recommend(
   }
   lap("eligibility");
 
-  // 4. Screening with access-aware travel-time estimates.
+  // 4. Road-graph engine. When configured, WayDine's own Dijkstra over OpenStreetMap data
+  // replaces the matrix screening and via-route calls; any failure falls back to Google routing.
+  let graphTrip: GraphTrip | null = null;
+  let routing: RoutingSummary = { engine: "google" };
+  let graphScale = 1;
+  if (ctx.graph) {
+    try {
+      graphTrip = prepareGraphTrip(await ctx.graph.load(geometry, signal), source, destination, geometry);
+      // Graph speeds are class-based estimates; scale them so the baseline matches Google's duration.
+      graphScale = Math.min(2.5, Math.max(0.4, baseline.duration / graphTrip.baseline.sec));
+      routing = {
+        engine: "graph",
+        graph: {
+          nodes: graphTrip.nodes, baselineSec: Math.round(graphTrip.baseline.sec), baselineM: Math.round(graphTrip.baseline.m),
+          googleBaselineSec: Math.round(baseline.duration), timeScale: Math.round(graphScale * 100) / 100, warnings: graphTrip.warnings,
+        },
+      };
+    } catch (error) {
+      if (error instanceof AppError && error.code === "CANCELLED") throw error;
+      const reason = error instanceof AppError ? error.message : "The road graph could not be prepared.";
+      routing = { engine: "google", fallbackReason: reason };
+      warnings.push(`WayDine's own road-graph routing wasn't used (${reason}) so Google routing was used instead.`);
+    }
+    lap("graph");
+  }
+
   const selected = selectForScreening(
     eligible.map((e) => ({ ...e, routePositionM: e.venue.routePositionM, straightLineFromRouteM: e.venue.straightLineFromRouteM })),
     baseline.distance,
-    RECOMMEND_LIMITS.screenMax
+    graphTrip ? RECOMMEND_LIMITS.graphEvalMax : RECOMMEND_LIMITS.screenMax
   );
   let notEvaluated = discoveryNotEvaluated + eligible.length - selected.length;
   const routedTo = (v: CorridorVenue): LngLat => v.accessPoint ?? v.location;
-  const shortlist: Array<Eligible & { estimatedExtraSec: number }> = [];
-  if (selected.length > 0) {
-    const { screened } = await screenByMatrix(ctx, source, destination, selected.map((e) => routedTo(e.venue)), signal);
-    for (const s of screened) {
-      const e = selected[s.index]!;
-      if (s.estimatedExtraSec === null) {
-        exclude(e.venue.id, e.venue.name, "unreachable", "No drivable route to this place was found from your route.", 1);
-      } else if (s.estimatedExtraSec > budgetSec * RECOMMEND_LIMITS.screenSlackFactor + RECOMMEND_LIMITS.screenSlackSec) {
-        exclude(
-          e.venue.id,
-          e.venue.name,
-          "detour",
-          `Estimated to add about ${formatMinutes(s.estimatedExtraSec)} of driving (your limit is ${preferences.maxDetourMinutes} min).`,
-          0
-        );
-      } else {
-        shortlist.push({ ...e, estimatedExtraSec: s.estimatedExtraSec });
+  let toVerify: Eligible[];
+  let verified: Verified[];
+
+  if (graphTrip) {
+    const trip = graphTrip;
+    const viaFrom = (g: GraphStop): ViaRoute => ({
+      durationSec: baseline.duration + g.extraSec * graphScale, distanceM: baseline.distance + g.extraM, toStopSec: g.toStopSec * graphScale,
+      geometry: g.geometry, snapDistanceM: g.snapDistanceM, stopOnRoad: g.stopOnRoad, toStopDistanceM: g.toStopM, legs: [],
+    });
+    toVerify = selected;
+    verified = [];
+    for (const e of selected) {
+      if (signal?.aborted) throw new AppError("CANCELLED", "Request was cancelled.");
+      await new Promise<void>((resolve) => setImmediate(resolve)); // Dijkstra is CPU-bound; let cancellations through.
+      const r = trip.evaluate(routedTo(e.venue));
+      verified.push(r.ok
+        ? { ok: true, via: viaFrom(r.stop), assessment: r.stop.assessment, graph: r.stop }
+        : { ok: false, error: new AppError("NO_ROUTE", "No route in the road graph.", { diagnostic: r.reason }) });
+    }
+    lap("graph-routing");
+  } else {
+    const shortlist: Array<Eligible & { estimatedExtraSec: number }> = [];
+    if (selected.length > 0) {
+      const { screened } = await screenByMatrix(ctx, source, destination, selected.map((e) => routedTo(e.venue)), signal);
+      for (const s of screened) {
+        const e = selected[s.index]!;
+        if (s.estimatedExtraSec === null) {
+          exclude(e.venue.id, e.venue.name, "unreachable", "No drivable route to this place was found from your route.", 1);
+        } else if (s.estimatedExtraSec > budgetSec * RECOMMEND_LIMITS.screenSlackFactor + RECOMMEND_LIMITS.screenSlackSec) {
+          exclude(
+            e.venue.id,
+            e.venue.name,
+            "detour",
+            `Estimated to add about ${formatMinutes(s.estimatedExtraSec)} of driving (your limit is ${preferences.maxDetourMinutes} min).`,
+            0
+          );
+        } else {
+          shortlist.push({ ...e, estimatedExtraSec: s.estimatedExtraSec });
+        }
       }
     }
-  }
-  lap("screening");
+    lap("screening");
 
-  // 5. Verify the most promising stops as complete journeys.
-  const verifyOrder = [...shortlist].sort((a, b) => {
-    const penalty = (x: Eligible) =>
-      (x.venue.hours.length === 0 ? RANKING_PENALTIES_SEC.hoursUnknown : 0) +
-      (x.dietUnconfirmed ? RANKING_PENALTIES_SEC.dietUnconfirmed : 0);
-    return a.estimatedExtraSec + penalty(a) - (b.estimatedExtraSec + penalty(b));
-  });
-  const toVerify = verifyOrder.slice(0, RECOMMEND_LIMITS.verifyMax);
-  notEvaluated += verifyOrder.length - toVerify.length;
-  const verified = toVerify.length
-    ? await verifyStops(ctx, source, destination, toVerify.map((e) => routedTo(e.venue)), signal)
-    : [];
-  lap("verification");
+    // 5. Verify the most promising stops as complete journeys.
+    const verifyOrder = [...shortlist].sort((a, b) => {
+      const penalty = (x: Eligible) =>
+        (x.venue.hours.length === 0 ? RANKING_PENALTIES_SEC.hoursUnknown : 0) +
+        (x.dietUnconfirmed ? RANKING_PENALTIES_SEC.dietUnconfirmed : 0);
+      return a.estimatedExtraSec + penalty(a) - (b.estimatedExtraSec + penalty(b));
+    });
+    toVerify = verifyOrder.slice(0, RECOMMEND_LIMITS.verifyMax);
+    notEvaluated += verifyOrder.length - toVerify.length;
+    verified = toVerify.length
+      ? await verifyStops(ctx, source, destination, toVerify.map((e) => routedTo(e.venue)), signal)
+      : [];
+    lap("verification");
+  }
 
   const candidates: Array<RankInput & { rec: Omit<Recommendation<Provider>, "rank"> }> = [];
   verified.forEach((r, i) => {
@@ -261,7 +319,10 @@ export async function recommend(
     if (!r.ok) {
       const err = r.error;
       if (err instanceof AppError && err.code === "NO_ROUTE") {
-        exclude(v.id, v.name, "unreachable", "No drivable route to this place was found.", 1);
+        const reason = err.diagnostic === "no-road" ? "No drivable road within 75 m of it in the OpenStreetMap data, so a route to it couldn't be calculated."
+          : err.diagnostic === "no-path" ? "The OpenStreetMap road graph has no legal path to it from your route."
+          : "No drivable route to this place was found.";
+        exclude(v.id, v.name, "unreachable", reason, 1);
       } else if (err instanceof AppError && err.code === "QUOTA_EXCEEDED") {
         exclude(v.id, v.name, "verification", "Today's free routing allowance ran out before this place could be checked.", 4);
       } else {
@@ -294,9 +355,14 @@ export async function recommend(
       return;
     }
     const basis = v.accessPoint ? "provider-access-point" : "listing-coordinate";
-    const confidence = via.snapDistanceM <= (basis === "provider-access-point" ? 50 : 35) ? "good" : "uncertain";
+    const confidence = via.snapDistanceM <= (basis === "provider-access-point" || r.graph ? 50 : 35) ? "good" : "uncertain";
     const access = { basis, snapDistanceM: via.snapDistanceM, confidence } as const;
-    const routeAssessment = assessRoute(geometry, baseline.legs, via, v.location);
+    const routeAssessment = r.assessment ?? assessRoute(geometry, baseline.legs, via, v.location);
+    const backwardM = routeAssessment.backwardTravelNearStop.estimatedMetres ?? 0;
+    if (r.graph && routeAssessment.backwardTravelNearStop.status === "possible" && backwardM >= RECOMMEND_LIMITS.graphBackwardExcludeM) {
+      exclude(v.id, v.name, "detour", `Reaching it means driving about ${backwardM} m backward along your route.`, 0);
+      return;
+    }
     const { facts, uncertainties } = explain({
       extraTimeSec: extraSec,
       arrivalLabel: arrivalLabel(arrival),
@@ -309,6 +375,7 @@ export async function recommend(
       cuisineMatched: e.cuisineMatched,
     });
     const budget = assessBudget(preferences.budgetPerPersonInr, v.google?.priceRange);
+    if (r.graph) facts.push("Route calculated by WayDine's own road graph (Dijkstra over OpenStreetMap data); times are scaled to Google's duration for your route.");
     if (budget === "likely-within") facts.push("Google's typical price range falls within your per-person budget; actual menu prices may differ.");
     else if (budget === "unconfirmed") uncertainties.push("The listed typical price range doesn't confirm whether this stop fits your per-person budget. Check the menu.");
     if (routeAssessment.uTurns.additionalToBaseline === "possible") {
@@ -361,6 +428,7 @@ export async function recommend(
       facts,
       uncertainties,
       routeAssessment,
+      ...(r.graph ? { routing: { engine: "graph" as const, rawExtraSec: Math.round(r.graph.extraSec), uTurns: r.graph.uTurns } } : {}),
       ...(v.google ? { google: v.google } : {}),
     };
     candidates.push({
@@ -379,6 +447,24 @@ export async function recommend(
 
   const ordered: Recommendation<Provider>[] = sortByRankingCost(candidates, preferences.diet).map((c, i) => ({ ...c.rec, rank: i + 1 }));
   lap("ranking");
+
+  // Google Routes is only a cross-check on the best graph results; its failure never changes the ranking.
+  const crossCheckTop = graphTrip ? (ctx.graph?.crossCheckTop ?? 0) : 0;
+  if (crossCheckTop > 0 && ordered.length > 0) {
+    const top = ordered.slice(0, crossCheckTop);
+    const checks = await verifyStops(ctx, source, destination, top.map((rec) => rec.routedTo), signal);
+    checks.forEach((check, i) => {
+      const rec = top[i]!;
+      if (!rec.routing) return;
+      if (!check.ok) { rec.routing.crossCheck = { status: "unavailable", googleExtraSec: null, differenceSec: null }; return; }
+      const googleExtra = Math.max(0, Math.round(check.via.durationSec - baseline.duration));
+      const difference = rec.extraTimeSec - googleExtra;
+      const differs = Math.abs(difference) > Math.max(180, 0.5 * Math.max(googleExtra, rec.extraTimeSec));
+      rec.routing.crossCheck = { status: differs ? "differs" : "agrees", googleExtraSec: googleExtra, differenceSec: difference };
+      if (differs) rec.uncertainties.push(`Google Routes estimates ${formatMinutes(googleExtra)} extra for this stop, against ${formatMinutes(rec.extraTimeSec)} from WayDine's road graph; the OpenStreetMap data may be missing roads or restrictions.`);
+    });
+    lap("crosscheck");
+  }
 
   if (notEvaluated > 0) {
     warnings.push(
@@ -411,6 +497,7 @@ export async function recommend(
         summary: r.legs[0]?.summary ?? "",
       })),
     },
+    routing,
     recommendations: ordered,
     excluded: excluded
       .sort((a, b) => a.order - b.order)

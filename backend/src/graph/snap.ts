@@ -6,12 +6,13 @@ import { trafficEdgeKey } from "./traffic.js";
 export interface SnapResult { graph: RoadGraph; node: number; distanceM: number; ambiguous: boolean }
 
 /** Attach a virtual point by splitting both directions of the selected road segment. */
-export function snapToRoad(graph: RoadGraph, point: LngLat, maxDistanceM = 50): SnapResult | null {
+export function snapToRoad(graph: RoadGraph, point: LngLat, maxDistanceM = 50, accept?: (edge: RoadEdge) => boolean): SnapResult | null {
   if (!Number.isFinite(point[0]) || !Number.isFinite(point[1]) || !Number.isFinite(maxDistanceM) || maxDistanceM < 0) return null;
   let best: { edge: RoadEdge; distance: number; projected: LngLat; fraction: number } | undefined;
   let secondDistance = Infinity;
   const seen = new Set<string>();
   for (const edges of graph.outgoing.values()) for (const edge of edges) {
+    if (accept && !accept(edge)) continue;
     const a = graph.nodes.get(edge.from), b = graph.nodes.get(edge.to); if (!a || !b) continue;
     const segment = `${edge.way}:${Math.min(edge.from, edge.to)}:${Math.max(edge.from, edge.to)}`;
     if (seen.has(segment)) continue; seen.add(segment);
