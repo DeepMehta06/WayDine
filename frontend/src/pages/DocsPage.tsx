@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { ArrowLeft, BookOpen, Search } from "lucide-react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Lenis from "lenis";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 import guide from "../../../docs/PROJECT_GUIDE.md?raw";
 import { Logo } from "@/components/shell/Logo";
 import { useReducedMotion } from "@/lib/motion";
+import { Mermaid } from "@/components/docs/Mermaid";
 import "./docs.css";
 
 gsap.registerPlugin(ScrollTrigger);
@@ -15,18 +19,33 @@ const sections = guide.split(/^## /m).slice(1).map((part) => {
   return { title, body: body.join("\n").trim(), id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-") };
 });
 
+function codeProps(child: ReactNode): { className?: string; text: string } | null {
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) return null;
+  return { className: child.props.className, text: String(child.props.children ?? "").replace(/\n$/, "") };
+}
+
+const markdownComponents: Components = {
+  pre({ children }) {
+    const first = codeProps(Array.isArray(children) ? children[0] : children);
+    if (!first) return <pre tabIndex={0}>{children}</pre>;
+    const lang = /language-(\w+)/.exec(first.className ?? "")?.[1];
+    if (lang === "mermaid") return <Mermaid chart={first.text} />;
+    return <pre tabIndex={0}><code className={first.className}>{first.text}</code></pre>;
+  },
+  code({ className, children }) {
+    return <code className={className}>{children}</code>;
+  },
+  a({ href, children }) {
+    const external = /^https?:\/\//.test(href ?? "");
+    return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>{children}</a>;
+  },
+  table({ children }) {
+    return <div className="docs-table-wrap"><table>{children}</table></div>;
+  },
+};
+
 function Content({ text }: { text: string }) {
-  return text.split(/(```[\s\S]*?```)/g).filter(Boolean).map((block, i) => {
-    if (block.startsWith("```")) {
-      return <pre key={i} tabIndex={0}><code>{block.replace(/^```[^\n]*\n/, "").replace(/```$/, "").trimEnd()}</code></pre>;
-    }
-    return block.trim().split(/\n\s*\n/).filter(Boolean).map((paragraph, j) => {
-      const lines = paragraph.split("\n");
-      if (lines.every((line) => /^- /.test(line))) return <ul key={`${i}-${j}`}>{lines.map((line) => <li key={line}>{line.slice(2)}</li>)}</ul>;
-      if (lines.every((line) => /^\d+\. /.test(line))) return <ol key={`${i}-${j}`}>{lines.map((line) => <li key={line}>{line.replace(/^\d+\. /, "")}</li>)}</ol>;
-      return <p key={`${i}-${j}`}>{paragraph}</p>;
-    });
-  });
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown>;
 }
 
 export default function DocsPage() {
@@ -58,7 +77,7 @@ export default function DocsPage() {
       <p className="docs-eyebrow"><BookOpen size={16} aria-hidden /> THE WAYDINE FIELD GUIDE</p>
       <h1>Every road. Every decision.<br /><span>Documented.</span></h1>
       <p>From the first route request to the last database row. Explore how WayDine finds food along your drive—and how to build, run and maintain it.</p>
-      <div className="docs-tags"><span>Architecture</span><span>API reference</span><span>Operations</span><span>Developer guide</span></div>
+      <div className="docs-tags"><span>Architecture</span><span>Algorithms</span><span>API reference</span><span>Operations</span><span>Developer guide</span></div>
     </div>
     <div className="docs-layout">
       <aside className="docs-sidebar">
