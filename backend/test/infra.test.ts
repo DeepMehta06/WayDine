@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { loadConfig } from "../src/config.js";
 import { SharedRun, TtlCache } from "../src/lib/cache.js";
 import { fetchJson } from "../src/lib/http.js";
 import { ClientRateLimiter, istDayKey, QuotaManager } from "../src/lib/quota.js";
@@ -71,6 +72,77 @@ describe("#67 runtime validation of provider responses", () => {
 });
 
 describe("#62 hard free-tier ceilings", () => {
+  it("allows explicit null or none request limits and rejects invalid values", () => {
+    const c = loadConfig({ GOOGLE_PLACES_NEARBY_PER_DAY: "none", GOOGLE_PLACES_DETAILS_PER_DAY: "none" });
+    expect(c.GOOGLE_PLACES_NEARBY_PER_DAY).toBeNull();
+    expect(c.GOOGLE_PLACES_DETAILS_PER_DAY).toBeNull();
+    expect(c.GOOGLE_PLACES_NEARBY_PER_MONTH).toBe(100);
+    expect(loadConfig({}).GOOGLE_PLACES_NEARBY_PER_DAY).toBe(20);
+    expect(loadConfig({ GOOGLE_PLACES_DETAILS_PER_DAY: "42" }).GOOGLE_PLACES_DETAILS_PER_DAY).toBe(42);
+    const keys = ["GOOGLE_PLACES_NEARBY_PER_DAY", "GOOGLE_PLACES_DETAILS_PER_DAY",
+      "GOOGLE_PLACES_NEARBY_PER_MONTH", "GOOGLE_PLACES_DETAILS_PER_MONTH"] as const;
+    for (const key of keys) {
+      for (const value of ["null", "none"]) expect(loadConfig({ [key]: value })[key]).toBeNull();
+      expect(loadConfig({ [key]: "42" })[key]).toBe(42);
+      for (const value of ["", "0", "-1", "1.5", "NaN", "Infinity", "unlimited"]) {
+        expect(() => loadConfig({ [key]: value })).toThrow("Invalid backend configuration");
+      }
+    }
+  });
+
+  it("tracks unlimited usage across restarts and enforces a re-enabled ceiling", () => {
+    const file = join(tmp, "unlimited.json");
+    const now = () => new Date("2026-10-30T10:00:00+05:30");
+    const q = new QuotaManager({ google_places_nearby: null }, file, now);
+    q.reserve("google_places_nearby", 21);
+    expect(q.remaining("google_places_nearby")).toBe(Infinity);
+    expect(JSON.parse(JSON.stringify(q.snapshot())).buckets.google_places_nearby).toEqual({ used: 21, limit: null });
+    expect(() => q.reserve("google_places_details", 1)).toThrow(expect.objectContaining({ code: "QUOTA_EXCEEDED" }));
+    q.persistNow();
+    const restored = new QuotaManager({ google_places_nearby: 22 }, file, now);
+    expect(restored.remaining("google_places_nearby")).toBe(1);
+    restored.reserve("google_places_nearby", 1);
+    expect(() => restored.reserve("google_places_nearby", 1)).toThrow(expect.objectContaining({ code: "QUOTA_EXCEEDED" }));
+  });
+
+  it("permits more than 20 mocked calls with no daily cap but still enforces the monthly cap", async () => {
+    for (const bucket of ["google_places_nearby", "google_places_details"] as const) {
+      const daily = new QuotaManager({ [bucket]: null }, null);
+      const monthly = new QuotaManager({ [bucket]: 21 }, null, undefined, "month");
+      let calls = 0;
+      const fetchImpl = (async () => {
+        calls++;
+        return new Response(JSON.stringify({ ok: true }));
+      }) as typeof fetch;
+      const request = () => fetchJson({ url: "https://x.test/unlimited", schema, provider: "mock", quota: daily,
+        budget: { bucket, units: 1 }, additionalBudget: { quota: monthly, bucket, units: 1 }, fetchImpl, retries: 0 });
+      for (let i = 0; i < 21; i++) await request();
+      await expect(request()).rejects.toMatchObject({ code: "QUOTA_EXCEEDED" });
+      expect(calls).toBe(21);
+      expect(daily.snapshot().buckets[bucket].used).toBe(21);
+      expect(monthly.snapshot().buckets[bucket].used).toBe(21);
+    }
+  });
+
+  it("allows more than 100 mocked calls with both daily and monthly caps disabled", async () => {
+    for (const bucket of ["google_places_nearby", "google_places_details"] as const) {
+      const daily = new QuotaManager({ [bucket]: null }, null);
+      const monthly = new QuotaManager({ [bucket]: null }, null, undefined, "month");
+      let calls = 0;
+      const fetchImpl = (async () => {
+        calls++;
+        return new Response(JSON.stringify({ ok: true }));
+      }) as typeof fetch;
+      for (let i = 0; i < 101; i++) {
+        await fetchJson({ url: "https://x.test/unlimited-month", schema, provider: "mock", quota: daily,
+          budget: { bucket, units: 1 }, additionalBudget: { quota: monthly, bucket, units: 1 }, fetchImpl, retries: 0 });
+      }
+      expect(calls).toBe(101);
+      expect(daily.snapshot().buckets[bucket]).toEqual({ used: 101, limit: null });
+      expect(monthly.snapshot().buckets[bucket]).toEqual({ used: 101, limit: null });
+    }
+  });
+
   it("refuses work beyond the daily budget with a retry hint", () => {
     const q = new QuotaManager({ ...GENEROUS_LIMITS, geoapify_credits: 2 }, null);
     q.reserve("geoapify_credits", 2);

@@ -14,8 +14,10 @@ import { googleRouter } from "./routes/google.js";
 import { preferencesRouter } from "./routes/preferences.js";
 import { graphRouter } from "./routes/graph.js";
 import { createPreferencesService, type PreferencesService } from "./services/preferences.js";
+import { createTripHistoryService, type TripHistoryService } from "./services/trips.js";
+import { tripsRouter } from "./routes/trips.js";
 
-export function createApp(config: AppConfig, ctx: ProviderContext, searchLog: SearchLogger, auth: AuthService | null = createAuthService(config), preferences: PreferencesService | null = createPreferencesService(config)): Express {
+export function createApp(config: AppConfig, ctx: ProviderContext, searchLog: SearchLogger, auth: AuthService | null = createAuthService(config), preferences: PreferencesService | null = createPreferencesService(config), trips: TripHistoryService | null = createTripHistoryService(config)): Express {
   const app = express();
   app.disable("x-powered-by");
   if (config.TRUST_PROXY === "true") app.set("trust proxy", 1);
@@ -28,7 +30,8 @@ export function createApp(config: AppConfig, ctx: ProviderContext, searchLog: Se
   app.use("/api/ready", readyRouter(config, ctx));
   app.use("/api/auth", authRouter(config, auth));
   app.use("/api/me/preferences", preferencesRouter(config, auth, preferences));
-  app.use("/api/google", googleRouter(config, ctx, auth, searchLog, preferences));
+  app.use("/api/me/trips", tripsRouter(config, auth, trips));
+  app.use("/api/google", googleRouter(config, ctx, auth, searchLog, preferences, trips));
   app.use("/api/places", placesRouter(ctx, new ClientRateLimiter(config.CLIENT_SUGGEST_PER_MINUTE)));
   app.use("/api/graph", graphRouter(config.OSM_GRAPH_PATH, config.OSM_GRAPH_SOURCE, ctx.fetchImpl));
   app.use("/api/recommend", recommendRouter(ctx, new ClientRateLimiter(config.CLIENT_RECOMMEND_PER_MINUTE), searchLog));

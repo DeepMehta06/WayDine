@@ -172,6 +172,13 @@ export default function TripPage() {
           )}
         </section>
 
+        {!loading && status === "success" && result?.history && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {result.history.saved ? <>Saved to your <Link to="/history" className="text-primary underline">trip history</Link>.</>
+              : <>Your results are ready, but this trip couldn't be saved to history.</>}
+          </p>
+        )}
+
         {loading && (
           <div role="status" className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm">

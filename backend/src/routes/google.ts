@@ -10,9 +10,10 @@ import type { ProviderContext } from "../providers/context.js";
 import { GOOGLE_PHOTO_NAME, googleDetails, googlePhotoUri } from "../providers/google.js";
 import { recommendRouter } from "./recommend.js";
 import type { PreferencesService } from "../services/preferences.js";
+import type { TripHistoryService } from "../services/trips.js";
 
 /** Authenticated Google Places endpoints with explicit request budgets. */
-export function googleRouter(config: AppConfig, ctx: ProviderContext, auth: AuthService | null, searchLog: SearchLogger, preferences: PreferencesService | null): Router {
+export function googleRouter(config: AppConfig, ctx: ProviderContext, auth: AuthService | null, searchLog: SearchLogger, preferences: PreferencesService | null, trips?: TripHistoryService | null): Router {
   const router = Router();
   const limiter = new ClientRateLimiter(4);
   router.use((_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
@@ -43,6 +44,6 @@ export function googleRouter(config: AppConfig, ctx: ProviderContext, auth: Auth
     res.setHeader("Cache-Control", "private, max-age=600");
     res.redirect(302, uri);
   }));
-  router.use("/recommend", requireTrustedOrigin(config), recommendRouter({ ...ctx, restaurantSource: "google" }, new ClientRateLimiter(2), searchLog, preferences));
+  router.use("/recommend", requireTrustedOrigin(config), recommendRouter({ ...ctx, restaurantSource: "google" }, new ClientRateLimiter(2), searchLog, preferences, trips));
   return router;
 }

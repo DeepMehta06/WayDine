@@ -46,7 +46,14 @@ address, type, business status, listing link and attribution. Rich details use
 Enterprise + Atmosphere fields, including dietary and meal-service information.
 Field masks never use `*`. No AI summaries are requested.
 
-Both daily and monthly budgets are checked before sending a request. Failed
+Set any of `GOOGLE_PLACES_NEARBY_PER_DAY`, `GOOGLE_PLACES_DETAILS_PER_DAY`,
+`GOOGLE_PLACES_NEARBY_PER_MONTH` or `GOOGLE_PLACES_DETAILS_PER_MONTH` to `null`
+(or `none`) to disable that application limit. Numeric positive integers
+re-enable the limits. Usage continues to be counted when a limit is disabled.
+Status responses represent a disabled limit as `null`. Photo budgets and
+per-request limits are configured separately.
+
+All enabled daily and monthly budgets are checked before sending a request. Failed
 requests count. There are **zero automatic Google retries**. Monthly budgets
 are recorded separately from the existing daily quota file; both use
 Asia/Kolkata boundaries. Deploy a single backend process for these file-based

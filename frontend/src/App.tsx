@@ -1,18 +1,20 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Route, Routes } from "react-router";
 import { Loader2 } from "lucide-react";
-import { AuthProvider } from "@/app/auth";
+import { AuthProvider, useAuth } from "@/app/auth";
 import { TripProvider } from "@/app/trip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { FullPageStatus, RequireAuth } from "@/components/shell/RequireAuth";
 
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
+const DocsPage = lazy(() => import("@/pages/DocsPage"));
 const SignInPage = lazy(() => import("@/pages/SignInPage"));
 const OnboardingPage = lazy(() => import("@/pages/OnboardingPage"));
 const PlanPage = lazy(() => import("@/pages/PlanPage"));
 const TripPage = lazy(() => import("@/pages/TripPage"));
 const StopPage = lazy(() => import("@/pages/StopPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
+const HistoryPage = lazy(() => import("@/pages/HistoryPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
 
 const pageFallback = (
@@ -22,11 +24,16 @@ const pageFallback = (
   </FullPageStatus>
 );
 
+function AccountTrips({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return <TripProvider key={user?.id ?? "signed-out"}>{children}</TripProvider>;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <TripProvider>
+        <AccountTrips>
           <ErrorBoundary
             fallback={
               <FullPageStatus>
@@ -40,6 +47,7 @@ export default function App() {
             <Suspense fallback={pageFallback}>
               <Routes>
                 <Route path="/" element={<LandingPage />} />
+                <Route path="/docs" element={<DocsPage />} />
                 <Route path="/signin" element={<SignInPage />} />
                 <Route element={<RequireAuth allowWithoutPreferences />}>
                   <Route path="/onboarding" element={<OnboardingPage />} />
@@ -49,12 +57,13 @@ export default function App() {
                   <Route path="/trip" element={<TripPage />} />
                   <Route path="/trip/stop/:id" element={<StopPage />} />
                   <Route path="/profile" element={<ProfilePage />} />
+                  <Route path="/history" element={<HistoryPage />} />
                 </Route>
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </Suspense>
           </ErrorBoundary>
-        </TripProvider>
+        </AccountTrips>
       </AuthProvider>
     </BrowserRouter>
   );

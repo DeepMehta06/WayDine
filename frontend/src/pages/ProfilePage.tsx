@@ -6,6 +6,7 @@ import { useAuth } from "@/app/auth";
 import { Button } from "@/components/ui/button";
 import { BudgetPicker, CuisinePicker, DetourPicker, DietPicker } from "@/components/preferences/PreferenceControls";
 import { ApiError } from "@/lib/api";
+import { TripHistoryPanel } from "@/components/trip/TripHistoryPanel";
 
 export default function ProfilePage() {
   const { user, preferences, updatePreferences, resetToDefaults, signOutUser } = useAuth();
@@ -14,7 +15,7 @@ export default function ProfilePage() {
   const [state, setState] = useState<{ busy: "save" | "reset" | "signout" | null; message: string | null; error: string | null }>({ busy: null, message: null, error: null });
 
   useEffect(() => {
-    document.title = "Preferences · WayDine";
+    document.title = "Your account · WayDine";
   }, []);
   useEffect(() => setPrefs(preferences), [preferences]);
 
@@ -60,6 +61,8 @@ export default function ProfilePage() {
           Sign out
         </Button>
       </section>
+
+      <TripHistoryPanel key={user?.id} preview />
 
       <h2 className="mt-10 font-display text-3xl font-semibold tracking-wide text-primary">Your trip defaults</h2>
       <p className="mt-1.5 text-foreground/75">Every search starts from these. You can still change them for a single trip.</p>

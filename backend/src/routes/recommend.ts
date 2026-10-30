@@ -11,6 +11,8 @@ import type { ClientRateLimiter } from "../lib/quota.js";
 import type { ProviderContext } from "../providers/context.js";
 import { recommend } from "../services/recommend.js";
 import type { PreferencesService } from "../services/preferences.js";
+import type { TripHistoryService } from "../services/trips.js";
+import { log } from "../lib/log.js";
 
 const lngLat = z.tuple([z.number().finite().min(-180).max(180), z.number().finite().min(-90).max(90)]);
 
@@ -37,6 +39,7 @@ export const requestSchema = z.object({
 /** The legacy route retains its required full preference object. */
 export const googleRequestSchema = requestSchema.omit({ preferences: true }).extend({
   preferences: userPreferencesSchema.partial().optional(),
+  tripLabels: z.object({ source: z.string().trim().min(1).max(120), destination: z.string().trim().min(1).max(120) }).strict().optional(),
 }).strict() satisfies z.ZodType<GoogleRecommendRequest>;
 
 export function validateRecommendRequest(body: unknown, now: Date): { input: z.infer<typeof requestSchema>; departure: Date } {
@@ -76,7 +79,7 @@ export function validateRecommendRequest(body: unknown, now: Date): { input: z.i
   return { input, departure };
 }
 
-export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter, searchLog: SearchLogger, savedPreferences?: PreferencesService | null): Router {
+export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter, searchLog: SearchLogger, savedPreferences?: PreferencesService | null, trips?: TripHistoryService | null): Router {
   const router = Router();
   const shared = new SharedRun<Awaited<ReturnType<typeof recommend>>>();
 
@@ -144,9 +147,26 @@ export function recommendRouter(ctx: ProviderContext, limiter: ClientRateLimiter
         candidateCount: result.diagnostics.inCorridor,
         durationMs: Date.now() - started,
       });
+      let history: { saved: boolean } | undefined;
+      if (parsedGoogle?.tripLabels && req.user && preferenceContext && !req.abortSignal.aborted) {
+        history = { saved: false };
+        try {
+          if (trips) {
+            await trips.record(req.user.id, {
+              requestId: req.id, sourceLabel: parsedGoogle.tripLabels.source,
+              destinationLabel: parsedGoogle.tripLabels.destination,
+              departureTime: departure.toISOString(), preferences: preferenceContext.preferences,
+              resultCount: result.recommendations.length,
+            });
+            history.saved = true;
+          }
+        } catch {
+          log("warn", "trip_history.save_failed", { requestId: req.id });
+        }
+      }
       res.setHeader("Cache-Control", "no-store");
       // Only searches with identical effective preferences share work.
-      res.json({ ...result, requestId: req.id, ...(preferenceContext ? { preferenceContext } : {}) });
+      res.json({ ...result, requestId: req.id, ...(preferenceContext ? { preferenceContext } : {}), ...(history ? { history } : {}) });
     })
   );
   return router;

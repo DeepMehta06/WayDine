@@ -15,6 +15,9 @@ const optionalNonEmpty = z
 const positiveInt = (fallback: number) =>
   z.coerce.number().int().positive().default(fallback);
 
+const requestLimit = (fallback: number) =>
+  z.union([z.enum(["none", "null"]).transform(() => null), z.coerce.number().int().positive()]).default(fallback);
+
 const envSchema = z.object({
   PORT: positiveInt(4000),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
@@ -31,10 +34,10 @@ const envSchema = z.object({
   GOOGLE_ROUTES_PER_DAY: positiveInt(100),
   GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY: positiveInt(300),
   GOOGLE_PLACES_ENABLED: z.enum(["true", "false"]).default("false"),
-  GOOGLE_PLACES_NEARBY_PER_DAY: positiveInt(20),
-  GOOGLE_PLACES_DETAILS_PER_DAY: positiveInt(20),
-  GOOGLE_PLACES_NEARBY_PER_MONTH: positiveInt(100),
-  GOOGLE_PLACES_DETAILS_PER_MONTH: positiveInt(100),
+  GOOGLE_PLACES_NEARBY_PER_DAY: requestLimit(20),
+  GOOGLE_PLACES_DETAILS_PER_DAY: requestLimit(20),
+  GOOGLE_PLACES_NEARBY_PER_MONTH: requestLimit(100),
+  GOOGLE_PLACES_DETAILS_PER_MONTH: requestLimit(100),
   // Photos load only on a restaurant's detail page (max 5 per place).
   GOOGLE_PLACES_PHOTOS_PER_DAY: positiveInt(30),
   GOOGLE_PLACES_PHOTOS_PER_MONTH: positiveInt(200),

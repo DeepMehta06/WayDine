@@ -263,6 +263,7 @@ export default function LandingPage() {
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <Logo />
+          <Link to="/docs" className="underline underline-offset-4">Documentation</Link>
           <p>Restaurant data from Google Maps. Map data © Google. Place search powered by Geoapify, © OpenStreetMap contributors.</p>
         </div>
       </footer>

@@ -100,7 +100,23 @@ export interface RecommendRequest {
 /** Authenticated Google searches use account defaults with optional per-trip overrides. */
 export type GoogleRecommendRequest = Omit<RecommendRequest, "preferences"> & {
   preferences?: Partial<UserPreferences>;
+  tripLabels?: { source: string; destination: string };
 };
+
+export interface TripHistoryEntry {
+  id: string;
+  sourceLabel: string;
+  destinationLabel: string;
+  createdAt: string;
+  departureTime: string;
+  preferences: UserPreferences;
+  resultCount: number;
+}
+
+export interface TripHistoryResponse {
+  trips: TripHistoryEntry[];
+  nextCursor: string | null;
+}
 
 export interface RecommendationPreferenceContext {
   preferences: UserPreferences;
@@ -292,6 +308,7 @@ export interface RecommendResponse<P extends RestaurantProvider = RestaurantProv
 
 export type GoogleRecommendResponse = RecommendResponse<RestaurantProvider> & {
   preferenceContext: RecommendationPreferenceContext;
+  history?: { saved: boolean };
 };
 
 export type ApiErrorCode =

@@ -18,6 +18,7 @@ import type {
   UserPreferencesResponse,
   ReverseResponse,
   SuggestResponse,
+  TripHistoryResponse,
 } from "@contract";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -167,7 +168,7 @@ async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit 
     throw new ApiError("NETWORK", "Couldn't reach WayDine. Check your connection and try again.");
   }
 
-  const body: unknown = await res.json().catch(() => null);
+  const body: unknown = res.status === 204 ? undefined : await res.json().catch(() => null);
   if (!res.ok) {
     const parsed = errorSchema.safeParse(body);
     if (!parsed.success) {
@@ -227,6 +228,7 @@ export function resetPreferences(): Promise<UserPreferencesResponse> {
 
 const userPreferencesSchema = preferenceSchema.shape.preferences;
 const googleRecommendSchema = recommendSchema.extend({
+  history: z.object({ saved: z.boolean() }).optional(),
   preferenceContext: z.object({
     preferences: userPreferencesSchema,
     source: z.enum(["saved", "defaults"]),
@@ -234,6 +236,25 @@ const googleRecommendSchema = recommendSchema.extend({
     budgetApplied: z.boolean(),
   }),
 }) satisfies z.ZodType<GoogleRecommendResponse>;
+
+const tripHistorySchema = z.object({
+  trips: z.array(z.object({
+    id: z.string().uuid(), sourceLabel: z.string(), destinationLabel: z.string(),
+    createdAt: z.string().datetime({ offset: true }), departureTime: z.string().datetime({ offset: true }),
+    preferences: userPreferencesSchema, resultCount: z.number().int().nonnegative(),
+  })),
+  nextCursor: z.string().nullable(),
+}) satisfies z.ZodType<TripHistoryResponse>;
+
+export function getTripHistory(limit = 20, cursor?: string, signal?: AbortSignal): Promise<TripHistoryResponse> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (cursor) query.set("cursor", cursor);
+  return request(`/api/me/trips?${query}`, tripHistorySchema, { signal });
+}
+
+export function deleteTripHistory(id?: string): Promise<void> {
+  return request(`/api/me/trips${id ? `/${encodeURIComponent(id)}` : ""}`, z.void(), { method: "DELETE" });
+}
 
 /** Google-backed search: saved account preferences apply, with optional per-trip overrides. */
 export function fetchGoogleRecommendations(body: GoogleRecommendRequest, signal: AbortSignal): Promise<GoogleRecommendResponse> {

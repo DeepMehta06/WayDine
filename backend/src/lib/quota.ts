@@ -1,7 +1,7 @@
 /**
- * Hard free-tier ceilings. Provider usage is reserved *before* each upstream
- * call (failed calls still count) against per-day budgets keyed by the
- * Asia/Kolkata date, and persisted to disk so a restart cannot reset them.
+ * Application request budgets. Usage is reserved before each upstream call
+ * (failed calls still count) against Asia/Kolkata daily or monthly periods.
+ * A null limit disables that ceiling while retaining persisted usage tracking.
  * Single-process only: a multi-instance deployment needs a shared store.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -40,7 +40,7 @@ export class QuotaManager {
   private writeTimer: NodeJS.Timeout | null = null;
 
   constructor(
-    private readonly limits: Partial<Record<BudgetBucket, number>>,
+    private readonly limits: Partial<Record<BudgetBucket, number | null>>,
     private readonly stateFile: string | null,
     private readonly now: () => Date = () => new Date(),
     private readonly period: "day" | "month" = "day"
@@ -92,6 +92,7 @@ export class QuotaManager {
 
   remaining(bucket: BudgetBucket): number {
     this.rollover();
+    if (this.limits[bucket] === null) return Infinity;
     return Math.max(0, (this.limits[bucket] ?? 0) - (this.state.used[bucket] ?? 0));
   }
 
@@ -113,11 +114,11 @@ export class QuotaManager {
     this.schedulePersist();
   }
 
-  snapshot(): { day: string; buckets: Record<BudgetBucket, { used: number; limit: number }> } {
+  snapshot(): { day: string; buckets: Record<BudgetBucket, { used: number; limit: number | null }> } {
     this.rollover();
-    const buckets = {} as Record<BudgetBucket, { used: number; limit: number }>;
+    const buckets = {} as Record<BudgetBucket, { used: number; limit: number | null }>;
     for (const key of Object.keys(this.limits) as BudgetBucket[]) {
-      buckets[key] = { used: this.state.used[key] ?? 0, limit: this.limits[key] ?? 0 };
+      buckets[key] = { used: this.state.used[key] ?? 0, limit: this.limits[key] === null ? null : this.limits[key] ?? 0 };
     }
     return { day: this.state.day, buckets };
   }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router";
-import { LogOut, Route, SlidersHorizontal, UserRound } from "lucide-react";
+import { Clock3, LogOut, Route, SlidersHorizontal, UserRound } from "lucide-react";
 import { useAuth } from "@/app/auth";
 import { cn } from "@/lib/utils";
 import { Logo } from "./Logo";
@@ -49,11 +49,16 @@ export function AppHeader() {
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4">
         <Logo to="/plan" />
         <nav aria-label="Main" className="flex items-center gap-1">
-          <NavLink to="/plan" className={navClass}>
+          <NavLink to="/docs" className={navClass}>Docs</NavLink>
+          <NavLink to="/plan" className={navClass} aria-label="Plan a trip">
             <Route aria-hidden className="size-4" />
             <span className="hidden sm:inline">Plan a trip</span>
           </NavLink>
-          <NavLink to="/profile" className={navClass}>
+          <NavLink to="/history" className={navClass} aria-label="Trip history">
+            <Clock3 aria-hidden className="size-4" />
+            <span className="hidden sm:inline">History</span>
+          </NavLink>
+          <NavLink to="/profile" className={navClass} aria-label="Account and preferences">
             <SlidersHorizontal aria-hidden className="size-4" />
             <span className="hidden sm:inline">Preferences</span>
           </NavLink>
@@ -78,6 +83,7 @@ export function AppHeader() {
                   </div>
                 </div>
                 <div className="my-1 h-px bg-border" />
+                <NavLink to="/history" role="menuitem" onClick={() => setOpen(false)} className="flex items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-muted"><Clock3 aria-hidden className="size-4" />Trip history</NavLink>
                 <button
                   type="button"
                   role="menuitem"

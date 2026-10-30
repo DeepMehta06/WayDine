@@ -25,8 +25,8 @@ export default function PlanPage() {
   const { preferences } = useAuth();
   const { draft, setDraft, run } = useTrip();
   const navigate = useNavigate();
-  const [sourceText, setSourceText] = useState(draft.source?.name ?? "");
-  const [destText, setDestText] = useState(draft.destination?.name ?? "");
+  const [sourceText, setSourceText] = useState(draft.source?.name ?? draft.sourceText ?? "");
+  const [destText, setDestText] = useState(draft.destination?.name ?? draft.destinationText ?? "");
   const [touched, setTouched] = useState(false);
   const [showOverrides, setShowOverrides] = useState(Object.keys(draft.overrides).length > 0);
   const [locating, setLocating] = useState(false);
@@ -135,11 +135,11 @@ export default function PlanPage() {
             place={draft.source}
             onTextChange={(t) => {
               setSourceText(t);
-              setDraft((d) => ({ ...d, source: null }));
+              setDraft((d) => ({ ...d, source: null, sourceText: t }));
             }}
             onSelect={(p) => {
               setSourceText(p.name);
-              setDraft((d) => ({ ...d, source: p }));
+              setDraft((d) => ({ ...d, source: p, sourceText: p.name }));
             }}
             near={draft.destination?.coordinates ?? mapCenter}
             error={show("source") ?? locationError}
@@ -163,7 +163,7 @@ export default function PlanPage() {
               onClick={() => {
                 setSourceText(destText);
                 setDestText(sourceText);
-                setDraft((d) => ({ ...d, source: d.destination, destination: d.source }));
+                setDraft((d) => ({ ...d, source: d.destination, destination: d.source, sourceText: destText, destinationText: sourceText }));
               }}
               className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
             >
@@ -180,11 +180,11 @@ export default function PlanPage() {
             place={draft.destination}
             onTextChange={(t) => {
               setDestText(t);
-              setDraft((d) => ({ ...d, destination: null }));
+              setDraft((d) => ({ ...d, destination: null, destinationText: t }));
             }}
             onSelect={(p) => {
               setDestText(p.name);
-              setDraft((d) => ({ ...d, destination: p }));
+              setDraft((d) => ({ ...d, destination: p, destinationText: p.name }));
             }}
             near={draft.source?.coordinates ?? mapCenter}
             error={show("destination")}

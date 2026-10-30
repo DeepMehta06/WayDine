@@ -1,5 +1,52 @@
 # WayDine
-Mini Project Hackathon
+
+<img src="docs/assets/waydine-icon.png" width="112" alt="WayDine road and dining pin icon" />
+
+**Eat on the way, not out of the way.** Route-aware restaurant discovery with explained detours, arrival-time checks, dietary preferences and saved trip plans.
+
+[Complete documentation](docs/PROJECT_GUIDE.md) · **In-app guide: `/docs`** · [Authentication](docs/GOOGLE_AUTH.md) · [Google Places](docs/GOOGLE_PLACES.md) · [Trip history](docs/TRIP_HISTORY.md)
+
+## Product preview
+
+![WayDine public landing page with illustrative trip examples](docs/assets/product-home.png)
+
+![WayDine documentation with section navigation and architecture guide](docs/assets/product-docs.png)
+
+![Looping tour of the WayDine landing page and documentation](docs/assets/product-tour.gif)
+
+The screenshots show the actual public UI. Landing-page restaurant examples are illustrative; the GIF cycles through public product and documentation views, without live restaurant requests. The generated brand icon is stored in `docs/assets/waydine-icon.png`.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI[React / Vite PWA] --> API[Express / TypeScript API]
+    UI --> Maps[Google Maps display]
+    API --> Pipeline[Discovery → eligibility → routing → ranking]
+    Pipeline --> Places[Google Places / legacy Geoapify]
+    Pipeline --> Routes[Google Routes]
+    Pipeline --> Graph[OSM directed graph / Dijkstra]
+    API --> Auth[Google OAuth via Supabase / encrypted sessions]
+    API --> DB[(Supabase PostgreSQL: profiles, preferences, trip history)]
+```
+
+The public `/docs` page and [project guide](docs/PROJECT_GUIDE.md) share one source. They cover the user journey, repository modules, recommendation stages and ranking weights, graph fallback, API endpoints, database migrations, configuration, security, testing and deployment. Account setup requires migrations 004–006; the optional analytics schema is separate from current provider-based discovery.
+
+## Verification
+
+```sh
+# backend/
+npm run typecheck
+npm test
+npm run build
+# frontend/
+npm run lint
+npx vitest run
+npm run build
+```
+
+Automated tests use mocked providers. Obtain explicit approval before any live Google Places request or bounded test batch. For production, configure SPA fallback for `/docs` and other frontend routes while forwarding `/api` to Express.
+
 Eat on the way, not out of the way. Finds restaurants actually on your driving
 route — real road distance, direction of travel, and meal timing — instead of
 anything just nearby.
@@ -43,6 +90,13 @@ Google-authenticated accounts can read, update and reset their dietary, cuisine,
 detour and food-budget defaults. Apply migration 005 after migration 004.
 See [user preferences setup and API](docs/USER_PREFERENCES.md).
 
+## User trip history
+
+Signed-in users can open **History** or their profile's **Recent trips** to see
+previous successful searches. Apply `backend/sql/006_trip_history.sql` after
+migrations 004 and 005. No additional provider keys are needed.
+See [trip history setup and behavior](docs/TRIP_HISTORY.md).
+
 ## Structure
 
 ```
@@ -55,8 +109,8 @@ frontend/  React + Vite + TypeScript PWA (Tailwind, shadcn/ui, Google Maps)
 1. **Maps and routing**: configure Google Maps and Google Routes as described
    above. Geoapify is used by the existing place search and restaurant
    discovery endpoints; Mapbox search is disabled for the Google map.
-2. **Supabase** (optional): only used to log `search_history` for analytics —
-   not required for recommendations to work. If you want it, create a project
+2. **Supabase**: required for Google authentication, saved preferences and trip
+   history (migrations 004–006). Optional analytics use `search_history`. Create a project
    and run `backend/sql/001_schema.sql` in the SQL editor for the
    `search_history` table. (`002_candidates_rpc.sql` and `003_seed.sql` are
    leftover from an earlier curated-DB design — see "Restaurant data source"
@@ -156,7 +210,7 @@ down, endpoints not near a road) the search falls back to Google routing and say
 in `routing.fallbackReason` and the search notes. Road data is OpenStreetMap
 (© OpenStreetMap contributors); turn restrictions and access may be incomplete.
 
-1. **Discover** — obtain a Mapbox driving route and search for food places
+1. **Discover** — obtain a Google driving route and search for food places
    along it; the opt-in Google route uses a 200 m point-to-polyline corridor.
 2. **Screen and verify** — apply food preferences, estimate detours with Matrix,
    then verify shortlisted stops as complete via-stop driving journeys.

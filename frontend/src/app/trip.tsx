@@ -12,6 +12,8 @@ import type { DepartureChoice, SelectedPlace } from "@/lib/search-state";
 export interface TripDraft {
   source: SelectedPlace | null;
   destination: SelectedPlace | null;
+  sourceText?: string;
+  destinationText?: string;
   departure: DepartureChoice;
   /** Per-trip changes to saved preferences; omitted fields use the saved value. */
   overrides: Partial<UserPreferences>;
@@ -54,6 +56,7 @@ export function toRequest(search: TripSearch): GoogleRecommendRequest | null {
     source: draft.source.coordinates,
     destination: draft.destination.coordinates,
     departure,
+    tripLabels: { source: draft.source.name.trim().slice(0, 120), destination: draft.destination.name.trim().slice(0, 120) },
     ...(Object.keys(draft.overrides).length ? { preferences: draft.overrides } : {}),
     ...(search.routeIndex !== undefined ? { routeIndex: search.routeIndex } : {}),
   };

@@ -13,3 +13,4 @@ coverage/
 /backend/.data/osm-demo.json
 /backend/.data/overpass-test.json
 /backend/.data/osm-cache/
+/tmp
