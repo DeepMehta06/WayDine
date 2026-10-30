@@ -1,5 +1,5 @@
 # WayDine
-
+Mini Project Hackathon
 Eat on the way, not out of the way. Finds restaurants actually on your driving
 route — real road distance, direction of travel, and meal timing — instead of
 anything just nearby.
