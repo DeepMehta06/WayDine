@@ -1,6 +1,8 @@
 # WayDine
 
-<img src="docs/assets/waydine-icon.png" width="112" alt="WayDine road and dining pin icon" />
+<p align="center">
+  <img src="docs/assets/waydine-icon.png" width="112" alt="WayDine road and dining pin icon" />
+</p>
 
 **Eat on the way, not out of the way.** Route-aware restaurant discovery with explained detours, arrival-time checks, dietary preferences and saved trip plans.
 
