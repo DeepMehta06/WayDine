@@ -35,14 +35,22 @@ const envSchema = z.object({
   GOOGLE_ROUTE_MATRIX_ELEMENTS_PER_DAY: requestLimit(300),
   GOOGLE_RECOMMEND_PER_MINUTE: requestLimit(2),
   GOOGLE_PLACES_ENABLED: z.enum(["true", "false"]).default("false"),
+  // Nearby Search (legacy circle-sampling path) is unused by the live Google
+  // flow since search-along-route replaced it, but the budget stays configurable.
   GOOGLE_PLACES_NEARBY_PER_DAY: requestLimit(20),
-  GOOGLE_PLACES_DETAILS_PER_DAY: requestLimit(20),
   GOOGLE_PLACES_NEARBY_PER_MONTH: requestLimit(100),
+  // Text Search (New) with searchAlongRouteParameters: one call covers the whole
+  // route, so this budgets pages (<=20 results each), not search areas.
+  GOOGLE_PLACES_TEXT_SEARCH_PER_DAY: requestLimit(20),
+  GOOGLE_PLACES_TEXT_SEARCH_PER_MONTH: requestLimit(100),
+  GOOGLE_PLACES_DETAILS_PER_DAY: requestLimit(20),
   GOOGLE_PLACES_DETAILS_PER_MONTH: requestLimit(100),
   // Photos load only on a restaurant's detail page (max 5 per place).
-  GOOGLE_PLACES_PHOTOS_PER_DAY: positiveInt(30),
-  GOOGLE_PLACES_PHOTOS_PER_MONTH: positiveInt(200),
-  GOOGLE_PLACES_SEARCHES_PER_REQUEST: z.coerce.number().int().min(2).max(10).default(3),
+  GOOGLE_PLACES_PHOTOS_PER_DAY: requestLimit(30),
+  GOOGLE_PLACES_PHOTOS_PER_MONTH: requestLimit(200),
+  // Pages of up to 20 results fetched per search-along-route search. Google caps
+  // Text Search (New) at 60 results total regardless of this setting.
+  GOOGLE_PLACES_SEARCHES_PER_REQUEST: z.coerce.number().int().min(1).max(10).default(3),
   GOOGLE_PLACES_DETAILS_PER_REQUEST: z.coerce.number().int().min(1).max(8).default(3),
   GOOGLE_PLACES_CORRIDOR_M: z.coerce.number().int().min(50).max(1000).default(200),
   GOOGLE_PLACES_QUOTA_FILE: z.string().default(".data/google-places-monthly.json"),

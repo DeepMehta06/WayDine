@@ -27,14 +27,17 @@ Defaults (also listed in `backend/.env.example`):
 | Setting | Default |
 | --- | --- |
 | `GOOGLE_PLACES_ENABLED` | `false` |
-| `GOOGLE_PLACES_NEARBY_PER_DAY` | `20` |
+| `GOOGLE_PLACES_TEXT_SEARCH_PER_DAY` | `20` |
+| `GOOGLE_PLACES_TEXT_SEARCH_PER_MONTH` | `100` |
 | `GOOGLE_PLACES_DETAILS_PER_DAY` | `20` |
-| `GOOGLE_PLACES_NEARBY_PER_MONTH` | `100` |
 | `GOOGLE_PLACES_DETAILS_PER_MONTH` | `100` |
-| `GOOGLE_PLACES_SEARCHES_PER_REQUEST` | `3` |
+| `GOOGLE_PLACES_PHOTOS_PER_DAY` | `30` |
+| `GOOGLE_PLACES_PHOTOS_PER_MONTH` | `200` |
+| `GOOGLE_PLACES_SEARCHES_PER_REQUEST` | `3` (pages, <=20 results each; Google caps Text Search (New) at 60 total) |
 | `GOOGLE_PLACES_DETAILS_PER_REQUEST` | `3` |
 | `GOOGLE_PLACES_CORRIDOR_M` | `200` |
 | `GOOGLE_PLACES_QUOTA_FILE` | `.data/google-places-monthly.json` |
+| `GOOGLE_PLACES_NEARBY_PER_DAY` / `_PER_MONTH` | `20` / `100` — unused budget, kept for the legacy circle-sampling code path |
 
 These are conservative **application request ceilings**, not a representation
 of Google's free tier or a guarantee of zero charges. Google meters different
@@ -46,12 +49,16 @@ address, type, business status, listing link and attribution. Rich details use
 Enterprise + Atmosphere fields, including dietary and meal-service information.
 Field masks never use `*`. No AI summaries are requested.
 
-Set any of `GOOGLE_PLACES_NEARBY_PER_DAY`, `GOOGLE_PLACES_DETAILS_PER_DAY`,
-`GOOGLE_PLACES_NEARBY_PER_MONTH` or `GOOGLE_PLACES_DETAILS_PER_MONTH` to `null`
-(or `none`) to disable that application limit. Numeric positive integers
-re-enable the limits. Usage continues to be counted when a limit is disabled.
-Status responses represent a disabled limit as `null`. Photo budgets and
-per-request limits are configured separately.
+Set any `GOOGLE_PLACES_*_PER_DAY` or `GOOGLE_PLACES_*_PER_MONTH` variable
+(text search, details, photos, or the unused nearby-search budget) to `null`
+(or `none`) to disable that application limit — removing it entirely, not
+raising it. Numeric positive integers re-enable the limit. Usage continues to
+be counted when a limit is disabled. Status responses represent a disabled
+limit as `null`. These are **application-side ceilings only**; disabling them
+does not raise or bypass Google's own account quotas or billing — monitor
+actual spend in Google Cloud separately. Per-request limits
+(`GOOGLE_PLACES_SEARCHES_PER_REQUEST`, `GOOGLE_PLACES_DETAILS_PER_REQUEST`)
+are small positive integers, not disableable budgets.
 
 All enabled daily and monthly budgets are checked before sending a request. Failed
 requests count. There are **zero automatic Google retries**. Monthly budgets
@@ -66,6 +73,7 @@ counters, or replace them with a shared atomic quota store before scaling out.
 | `GET /api/google/status` | Reads local configuration only; no Google calls. |
 | `POST /api/google/recommend` | Google discovery/details plus the existing Mapbox driving pipeline; requires login and explicit enablement. |
 | `GET /api/google/restaurants/:placeId` | One rich Place Details lookup, including available reviews; requires login and explicit enablement. |
+| `GET /api/google/photo?name=...&w=...` | Resolves one Google photo reference (from Place Details) to a short-lived image URL and redirects; one billable Place Photo request; requires login. |
 
 The recommendation request body contains source, destination, departure, an
 optional route index and optional partial preference overrides. The authenticated
@@ -76,15 +84,18 @@ to require explicit preferences. Google responses also include `google` provider
 identifiers and restaurant details such as ratings, prices, meal flags, service
 options, amenities, photo references and attribution.
 
-Each recommendation request makes at most the configured nearby-search count
-plus the configured detail-lookup count. With defaults, that is at most **three
-Nearby Search calls and three Place Details calls**. A subsequent restaurant
-detail request is an additional lookup. Matrix/Directions calls are separately
-counted against the existing Mapbox budgets.
+Each recommendation request makes at most the configured search-along-route
+page count (`GOOGLE_PLACES_SEARCHES_PER_REQUEST`, default 3 pages of up to 20
+results) plus the configured detail-lookup count. With defaults, that is at
+most **three Text Search calls and three Place Details calls**. A subsequent
+restaurant detail request is an additional lookup. Matrix/Directions calls are
+separately counted against the existing Mapbox budgets.
 
-Requesting details does not download photos. The returned photo resource names,
-dimensions and author attribution are metadata for a future photo integration.
-No photo endpoint has been added, so image requests cannot happen implicitly.
+Requesting details returns photo resource names, dimensions and author
+attribution, but does not itself download any image. The frontend requests a
+photo only when a restaurant's detail page is opened (up to 5 per place), via
+`GET /api/google/photo`, which resolves one reference to a short-lived
+Google-hosted URL per call. Photos are never fetched for result-list cards.
 
 The Google recommendation endpoint defaults to two requests per client per minute,
 configured by `GOOGLE_RECOMMEND_PER_MINUTE`. Set it to `null` (or `none`) to disable
@@ -98,12 +109,15 @@ share in-flight work; results are not cached for subsequent requests.
 ## Discovery and filtering
 
 1. Obtain the selected baseline route using existing Mapbox Directions.
-2. Distribute bounded search circles over the whole route, including its ends.
-   The circles grow when the budget cannot support dense sampling. Reject
-   routes needing a Google search radius above 50 km before spending Google
-   requests.
-3. Request Nearby Search (New) results, at most 20 per area. It has no page-token
-   pagination. Report saturated/failed areas; never silently run extra searches.
+2. Encode the route geometry locally as a standard Google Encoded Polyline
+   (no extra request) and send it to Places API (New) Text Search with
+   `searchAlongRouteParameters`, using `textQuery: "restaurant"`. One call
+   covers the entire route, start to end, not just points sampled along it.
+   [Reference](https://developers.google.com/maps/documentation/places/web-service/search-along-route).
+3. Follow `nextPageToken` for up to `GOOGLE_PLACES_SEARCHES_PER_REQUEST` pages
+   (20 results each; Google caps the total at 60 regardless). Report when the
+   page cap is reached while results remain, or when a page request fails;
+   never silently request more than the configured page count.
 4. Deduplicate by provider ID and conservative name/distance matching. Measure
    actual point-to-polyline distance and apply the 200 m corridor. Exclude
    listings marked temporarily or permanently closed.
@@ -187,9 +201,14 @@ Run `npm run typecheck`, `npm test`, and `npm run build` from `backend/`.
 Google tests cover normalization, booleans, attribution, missing data, current
 and overnight hours, field masks, retry prevention, daily/monthly ceilings,
 deduplication, corridor boundaries, enrichment limits, detour filtering,
-authentication, partial failures and legacy API isolation. They use only mock
-Google and routing responses. The approved live check verified only basic Nearby
-Search access; it did not verify the rich detail field mask or full route flow.
+authentication, partial failures and legacy API isolation, plus
+search-along-route pagination (continuing across pages, stopping at the page
+cap, a page-cap-reached warning) and the local polyline encoder (verified
+against Google's own published reference example and round-tripped through an
+independent decoder). They use only mock Google and routing responses. The
+approved live check verified only basic Nearby Search access; it did not
+verify the rich detail field mask, the search-along-route request shape, or
+the full route flow — a live check of those still needs separate approval.
 
 A proposed first live check should be explicitly approved as **exactly one
 Nearby Search (New) request with maxResultCount=1 and identity/location fields**.

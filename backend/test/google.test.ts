@@ -63,6 +63,19 @@ function harness(items: Fixture[] = [fixture()], opts: { detailsCap?: number; ne
         .slice(0, 20).map((p) => Object.fromEntries(Object.entries(p).filter(([key]) => fields.includes(key))));
       return Response.json({ places });
     }
+    if (url.pathname === "/v1/places:searchText") {
+      const body = JSON.parse(String(init?.body));
+      if (!body.searchAlongRouteParameters?.polyline?.encodedPolyline) {
+        return Response.json({ error: { message: "missing polyline" } }, { status: 400 });
+      }
+      const fields = new Headers(init?.headers).get("X-Goog-FieldMask")!.split(",").map((s) => s.replace(/^places\./, ""));
+      const pageSize: number = body.pageSize ?? 20;
+      const offset = body.pageToken ? Number(String(body.pageToken).replace("offset:", "")) : 0;
+      const page = items.slice(offset, offset + pageSize);
+      const places = page.map((p) => Object.fromEntries(Object.entries(p).filter(([key]) => fields.includes(key))));
+      const nextPageToken = offset + pageSize < items.length ? `offset:${offset + pageSize}` : undefined;
+      return Response.json({ places, ...(nextPageToken ? { nextPageToken } : {}) });
+    }
     const id = url.pathname.slice("/v1/places/".length);
     const p = items.find((item) => item.id === id);
     return p ? Response.json(p) : Response.json({ error: "not found" }, { status: 404 });
@@ -208,7 +221,29 @@ describe("Google route discovery and recommendations (mocked providers)", () => 
     const h = harness([fixture("inside", north(mid, 199)), fixture("outside", north(mid, 201)), fixture("closed", mid, { businessStatus: "CLOSED_TEMPORARILY" })]);
     const result = await discoverGoogleVenues(h.ctx, [source, destination], 200);
     expect(result.venues.map((v) => v.id)).toEqual(["google:inside"]);
-    expect(h.requests.length).toBeLessThanOrEqual(3);
+    // One search-along-route call covers the whole route; no per-circle sampling.
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]!.url.pathname).toBe("/v1/places:searchText");
+    const sentBody = JSON.parse(String(h.requests[0]!.init?.body));
+    expect(sentBody.searchAlongRouteParameters.polyline.encodedPolyline).toEqual(expect.any(String));
+    expect(sentBody.searchAlongRouteParameters.polyline.encodedPolyline.length).toBeGreaterThan(0);
+  });
+  it("paginates past 20 results and stops once Google reports no further page", async () => {
+    const items = Array.from({ length: 35 }, (_, i) => fixture(`p${i}`, eastOf(source, 1000 + i * 100)));
+    const h = harness(items);
+    const result = await discoverGoogleVenues(h.ctx, [source, destination], 5000);
+    expect(h.requests).toHaveLength(2);
+    expect(result.diagnostics.discovered.google).toBe(35);
+    expect(result.diagnostics.saturatedAfterRefinement).toBe(0);
+  });
+  it("stops at the configured page cap and reports more results may exist", async () => {
+    const items = Array.from({ length: 65 }, (_, i) => fixture(`q${i}`, eastOf(source, 1000 + i * 80)));
+    const h = harness(items); // harness sets googlePlacesLimits.searches = 3 (max pages)
+    const result = await discoverGoogleVenues(h.ctx, [source, destination], 20000);
+    expect(h.requests).toHaveLength(3);
+    expect(result.diagnostics.discovered.google).toBe(60);
+    expect(result.diagnostics.saturatedAfterRefinement).toBeGreaterThan(0);
+    expect(result.diagnostics.warnings.some((w) => w.includes("more restaurants than"))).toBe(true);
   });
   it("returns rich restaurant data with actual via-route timings and Google attribution", async () => {
     const h = harness(); const result = await recommend(h.ctx, input, "google-test");
@@ -217,7 +252,7 @@ describe("Google route discovery and recommendations (mocked providers)", () => 
     expect(result.recommendations[0]!.viaRoute.geometry.length).toBeGreaterThan(1);
     expect(result.recommendations[0]!.facts.some((s) => s.includes("lunch service"))).toBe(true);
     expect(result.attribution).toContain("Google Maps");
-    expect(h.requests.filter((r) => r.url.pathname.includes("searchNearby")).length).toBeLessThanOrEqual(3);
+    expect(h.requests.filter((r) => r.url.pathname.includes("searchText"))).toHaveLength(1);
     expect(h.requests.filter((r) => r.init?.method === "GET")).toHaveLength(1);
   });
   it("filters an explicitly unavailable meal at actual arrival but keeps unknown service", async () => {
@@ -266,7 +301,7 @@ describe("Google route discovery and recommendations (mocked providers)", () => 
     expect(pure.recommendations).toHaveLength(0); expect(pure.excluded[0]!.stage).toBe("diet");
   });
   it("reports detail failures as unknown data without inventing restaurant information", async () => {
-    const h = harness(undefined, { failure: (url) => url.pathname.includes("searchNearby") ? undefined : 503 });
+    const h = harness(undefined, { failure: (url) => url.pathname.includes("searchText") ? undefined : 503 });
     const result = await recommend(h.ctx, input, "partial");
     expect(result.recommendations[0]).toMatchObject({ google: { rating: null, detailsStatus: "unavailable" }, diet: { vegetarian: "unknown" }, openingHours: { atArrival: "unknown" } });
     expect(result.diagnostics.warnings.some((w) => w.includes("could not be retrieved"))).toBe(true);
@@ -276,12 +311,12 @@ describe("Google route discovery and recommendations (mocked providers)", () => 
     const result = await recommend(h.ctx, input, "detour");
     expect(result.recommendations).toHaveLength(0); expect(result.excluded[0]!.stage).toBe("detour");
   });
-  it("reports saturated areas without automatic pagination/refinement requests", async () => {
+  it("a page exactly at the 20-result limit with no further page is not reported as truncated", async () => {
     const items = Array.from({ length: 20 }, (_, i) => fixture(`dense${i}`, mid)); const h = harness(items);
     const result = await discoverGoogleVenues(h.ctx, [source, destination], 200);
-    expect(result.diagnostics.saturatedAfterRefinement).toBeGreaterThan(0);
-    expect(result.diagnostics.warnings.some((w) => w.includes("20-result limit"))).toBe(true);
-    expect(h.requests).toHaveLength(3);
+    expect(result.diagnostics.discovered.google).toBe(20);
+    expect(result.diagnostics.saturatedAfterRefinement).toBe(0);
+    expect(h.requests).toHaveLength(1);
   });
   it("returns an empty result honestly and makes no detail requests", async () => {
     const h = harness([]); const result = await recommend(h.ctx, input, "empty");
@@ -342,7 +377,7 @@ describe("Google recommendations with account preferences", () => {
     const originalFetch = h.ctx.fetchImpl;
     h.ctx.fetchImpl = (async (input, init) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-      if (holdNearby && url.hostname === "places.googleapis.com" && url.pathname.includes("searchNearby")) await holdNearby;
+      if (holdNearby && url.hostname === "places.googleapis.com" && url.pathname.includes("searchText")) await holdNearby;
       return originalFetch(input, init);
     }) as typeof fetch;
     rows = new Map([["alice", { ...defaultUserPreferences(), diet: "pure-veg", cuisines: ["pizza"], maxDetourMinutes: 5, budgetPerPersonInr: 300 }]]);
@@ -462,6 +497,6 @@ describe("Google recommendations with account preferences", () => {
     expect(b.preferenceContext.budgetApplied).toBe(false);
     expect(a.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ stage: "budget" })]));
     expect(b.recommendations).toHaveLength(1);
-    expect(h.requests.filter((r) => r.url.pathname.includes("searchNearby"))).toHaveLength(6);
+    expect(h.requests.filter((r) => r.url.pathname.includes("searchText"))).toHaveLength(2);
   });
 });

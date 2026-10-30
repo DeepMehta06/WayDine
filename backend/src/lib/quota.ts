@@ -12,6 +12,7 @@ import { log } from "./log.js";
 export type BudgetBucket =
   | "geoapify_credits"
   | "google_places_nearby"
+  | "google_places_text_search"
   | "google_places_details"
   | "google_places_photos"
   | "google_routes"

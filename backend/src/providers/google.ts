@@ -5,6 +5,7 @@ import { cleanPhone, safeHttpUrl, type MapboxPeriod, type Venue } from "../domai
 import { normalizeCuisineTags } from "../domain/cuisine.js";
 import { AppError } from "../errors.js";
 import { fetchJson } from "../lib/http.js";
+import type { BudgetBucket } from "../lib/quota.js";
 import type { ProviderContext } from "./context.js";
 
 export const GOOGLE_NEARBY_LIMIT = 20;
@@ -102,9 +103,9 @@ export function googleStatusError(status: number): AppError | undefined {
   return undefined;
 }
 
-async function request<T>(ctx: ProviderContext, path: string, fields: string[], schema: z.ZodType<T>, opts: { body?: unknown; signal?: AbortSignal; details: boolean }): Promise<T> {
+async function request<T>(ctx: ProviderContext, path: string, fields: string[], schema: z.ZodType<T>, opts: { body?: unknown; signal?: AbortSignal; details: boolean; bucket?: BudgetBucket }): Promise<T> {
   const key = enabled(ctx);
-  const bucket = opts.details ? "google_places_details" : "google_places_nearby";
+  const bucket = opts.bucket ?? (opts.details ? "google_places_details" : "google_places_nearby");
   return fetchJson({
     url: `https://places.googleapis.com/v1/${path}`, schema, provider: "google-places", quota: ctx.quota,
     budget: { bucket, units: 1 }, additionalBudget: ctx.googleMonthlyQuota ? { quota: ctx.googleMonthlyQuota, bucket, units: 1 } : undefined,
@@ -125,6 +126,49 @@ export async function googleNearby(ctx: ProviderContext, center: LngLat, radiusM
   const places = result.places ?? [];
   for (const raw of places) { const venue = toGoogleVenue(raw); if (venue) venues.push(venue); else malformed++; }
   return { venues, malformed, saturated: places.length >= GOOGLE_NEARBY_LIMIT };
+}
+
+/**
+ * Restaurants along the whole driving route in one call (Text Search (New)
+ * with `searchAlongRouteParameters`), instead of sampling circles that leave
+ * gaps on long routes. `pageToken` continues a previous page; Google caps
+ * Text Search (New) at 60 results total across pages, 20 per page.
+ * https://developers.google.com/maps/documentation/places/web-service/search-along-route
+ */
+export async function googleSearchAlongRoute(
+  ctx: ProviderContext,
+  encodedPolyline: string,
+  pageToken: string | undefined,
+  signal?: AbortSignal
+): Promise<{ venues: Venue[]; malformed: number; nextPageToken: string | null }> {
+  enabled(ctx);
+  if (!encodedPolyline) throw new AppError("BAD_REQUEST", "Missing route geometry for restaurant search.");
+  const result = await request(
+    ctx,
+    "places:searchText",
+    [...GOOGLE_NEARBY_FIELDS.map((field) => `places.${field}`), "nextPageToken"],
+    z.object({ places: z.array(z.unknown()).default([]), nextPageToken: z.string().optional() }),
+    {
+      details: false,
+      signal,
+      bucket: "google_places_text_search",
+      body: {
+        textQuery: "restaurant",
+        pageSize: GOOGLE_NEARBY_LIMIT,
+        languageCode: "en",
+        searchAlongRouteParameters: { polyline: { encodedPolyline } },
+        ...(pageToken ? { pageToken } : {}),
+      },
+    }
+  );
+  const venues: Venue[] = [];
+  let malformed = 0;
+  for (const raw of result.places ?? []) {
+    const venue = toGoogleVenue(raw);
+    if (venue) venues.push(venue);
+    else malformed++;
+  }
+  return { venues, malformed, nextPageToken: result.nextPageToken ?? null };
 }
 
 /** Photo resource names as returned in Place Details: places/{placeId}/photos/{reference}. */

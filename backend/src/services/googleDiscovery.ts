@@ -1,27 +1,54 @@
 import type { LngLat, ProviderStatus } from "../contract/api.js";
 import { AppError } from "../errors.js";
-import { cumulativeDistances, planCorridorSearch, positionOnRoute } from "../lib/geo.js";
-import { mapSettled } from "../lib/http.js";
+import { cumulativeDistances, positionOnRoute } from "../lib/geo.js";
+import { encodePolyline } from "../lib/polyline.js";
 import type { ProviderContext } from "../providers/context.js";
-import { googleNearby } from "../providers/google.js";
+import { googleSearchAlongRoute } from "../providers/google.js";
 import type { DiscoveryResult } from "./discovery.js";
 import { mergeVenues } from "./merge.js";
 
+/** Google's own documented ceiling for Text Search (New): 60 results, 20 per page. */
+const GOOGLE_MAX_PAGES = 3;
+
+/**
+ * Restaurants along the entire route via Places Text Search (New) with
+ * `searchAlongRouteParameters`, replacing the earlier fixed-circle sampling
+ * (which left long stretches of a route unsearched between sample points).
+ * The corridor half-width is still enforced locally: the API biases toward
+ * the route but does not accept an explicit corridor radius.
+ */
 export async function discoverGoogleVenues(ctx: ProviderContext, route: LngLat[], halfWidthM: number, signal?: AbortSignal): Promise<DiscoveryResult> {
   if (!ctx.googlePlacesEnabled || !ctx.googlePlacesKey) throw new AppError("NOT_CONFIGURED", "Google Places is not enabled.");
-  const plan = planCorridorSearch(route, halfWidthM, ctx.googlePlacesLimits?.searches ?? 3);
-  // Reject before spending requests if the route cannot fit Google's maximum radius.
-  if (plan.radiusM > 50000) throw new AppError("BAD_REQUEST", "This route exceeds the configured Google search coverage. Increase the search-area budget or use a shorter route.");
-  const results = await mapSettled(plan.centers, 2, (center) => googleNearby(ctx, center, plan.radiusM, signal));
-  for (const result of results) if (!result.ok && result.error instanceof AppError && result.error.code === "CANCELLED") throw result.error;
-  const successful = results.filter((r) => r.ok);
-  const failed = results.length - successful.length;
-  const firstError = results.find((r) => !r.ok);
-  if (!successful.length) {
-    if (firstError && !firstError.ok && firstError.error instanceof AppError) throw firstError.error;
+  const encoded = encodePolyline(route);
+  const maxPages = Math.max(1, Math.min(GOOGLE_MAX_PAGES, ctx.googlePlacesLimits?.searches ?? GOOGLE_MAX_PAGES));
+
+  const pages: Array<{ venues: Awaited<ReturnType<typeof googleSearchAlongRoute>>["venues"]; malformed: number }> = [];
+  let pageToken: string | undefined;
+  let pagesFetched = 0;
+  let failure: unknown;
+  let truncatedByPageCap = false;
+
+  for (let i = 0; i < maxPages; i++) {
+    try {
+      const page = await googleSearchAlongRoute(ctx, encoded, pageToken, signal);
+      pages.push({ venues: page.venues, malformed: page.malformed });
+      pagesFetched++;
+      if (!page.nextPageToken) break;
+      pageToken = page.nextPageToken;
+      if (i === maxPages - 1) truncatedByPageCap = true;
+    } catch (error) {
+      if (error instanceof AppError && error.code === "CANCELLED") throw error;
+      failure = error;
+      break; // Don't keep paginating past a failed page.
+    }
+  }
+
+  if (pagesFetched === 0) {
+    if (failure instanceof AppError) throw failure;
     throw new AppError("UPSTREAM_UNAVAILABLE", "Google restaurant discovery is unavailable.");
   }
-  const raw = successful.flatMap((r) => r.value.venues);
+
+  const raw = pages.flatMap((p) => p.venues);
   const merged = mergeVenues(raw);
   const cumulative = cumulativeDistances(route);
   const venues = merged.flatMap((venue) => {
@@ -30,14 +57,25 @@ export async function discoverGoogleVenues(ctx: ProviderContext, route: LngLat[]
       ? [{ ...venue, straightLineFromRouteM: Math.round(pos.distanceM), routePositionM: Math.round(pos.alongM) }]
       : [];
   });
-  const saturated = successful.filter((r) => r.value.saturated).length;
+
   const warnings: string[] = [];
-  if (failed) warnings.push(`Google restaurant search failed in ${failed} of ${results.length} search areas; coverage is incomplete.`);
-  if (saturated) warnings.push(`${saturated} Google search areas reached the 20-result limit. Some restaurants may be missing; no automatic extra searches were made.`);
-  const status: ProviderStatus = failed ? results.some((r) => !r.ok && r.error instanceof AppError && r.error.code === "QUOTA_EXCEEDED") ? "quota" : "error" : "ok";
-  return { venues, diagnostics: {
-    searchPoints: results.length, failedSearchPoints: failed, saturatedAfterRefinement: saturated,
-    discovered: { geoapify: 0, mapbox: 0, google: raw.length, merged: merged.length, malformedDropped: successful.reduce((sum, r) => sum + r.value.malformed, 0) },
-    providers: { google: status }, warnings,
-  } };
+  if (failure) {
+    warnings.push(`Google restaurant search failed while loading page ${pagesFetched + 1} of results along your route; coverage may be incomplete.`);
+  }
+  if (truncatedByPageCap) {
+    warnings.push(`This route has more restaurants than the configured ${maxPages}-page search limit returns; some may be missing.`);
+  }
+  const status: ProviderStatus = failure ? (failure instanceof AppError && failure.code === "QUOTA_EXCEEDED" ? "quota" : "error") : "ok";
+
+  return {
+    venues,
+    diagnostics: {
+      searchPoints: pagesFetched,
+      failedSearchPoints: failure ? 1 : 0,
+      saturatedAfterRefinement: truncatedByPageCap ? 1 : 0,
+      discovered: { geoapify: 0, mapbox: 0, google: raw.length, merged: merged.length, malformedDropped: pages.reduce((sum, p) => sum + p.malformed, 0) },
+      providers: { google: status },
+      warnings,
+    },
+  };
 }
